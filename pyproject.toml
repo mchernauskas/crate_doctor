@@ -11,7 +11,7 @@ requires-python = ">=3.9"
 license = { text = "MIT" }
 authors = [{ name = "Matt Chernauskas", email = "matt.chernauskas@gmail.com" }]
 maintainers = [{ name = "Hypnotyc Productions LLC" }]
-keywords = ["rekordbox", "dj", "pioneer", "music-library", "cue-points"]
+keywords = ["rekordbox", "dj", "pioneer", "pioneer-dj", "music-library", "cue-points", "beatgrid", "cdj"]
 dependencies = ["pyrekordbox>=0.4", "numpy>=1.20"]
 
 [project.urls]

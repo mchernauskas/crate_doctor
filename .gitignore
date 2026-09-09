@@ -9,3 +9,9 @@ build/
 dist/
 *.egg-info/
 .crate_doctor_work*
+
+# local test scaffolding — not part of the tool
+TEST-ON-MY-MAC.command
+mactest.sh
+MAC-TEST-RESULTS.txt
+_sandbox_test/

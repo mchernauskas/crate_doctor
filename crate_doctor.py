@@ -54,6 +54,9 @@ quit Rekordbox is normal — Rekordbox does not checkpoint on exit. So "-wal is 
 does NOT mean Rekordbox is running. The reliable test is whether a checkpoint
 returns busy=0, which is what this tool does.
 
+Unofficial. Not affiliated with or endorsed by Pioneer DJ / AlphaTheta. "Rekordbox"
+is their trademark, used here only to describe what this tool reads.
+
 MIT licence. No warranty. Back up your library.
 """
 

@@ -13,6 +13,9 @@ Read-only unless you type `--write`.
 > mount. The macOS and Windows code paths are written and path-verified but unrun. Back up
 > before you use `--write`, and expect names and flags to move. See CHANGELOG.md.
 
+*Unofficial. Not affiliated with, endorsed by, or supported by Pioneer DJ / AlphaTheta.
+"Rekordbox" is their trademark, used here only to say what this tool reads.*
+
 ```
 backup     do this first
 cues       your cueing habit, which tracks break it, and --fix to repair them
