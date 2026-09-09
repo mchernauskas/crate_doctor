@@ -10,6 +10,11 @@ dist/
 *.egg-info/
 .crate_doctor_work*
 
+# macOS AppleDouble sidecars. exFAT drives get one per file and they are invisible
+# in Finder, so they end up committed unless you name them.
+._*
+.DS_Store
+
 # local test scaffolding — not part of the tool
 TEST-ON-MY-MAC.command
 mactest.sh
