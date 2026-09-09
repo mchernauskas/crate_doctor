@@ -1,5 +1,67 @@
 # Changelog
 
+## 0.9.0a2 — alpha (unreleased)
+
+### `intake` and `finish`: getting new music in
+
+Ten commands now, not eight. Previously the tool could only work on tracks that were
+already in your library and already analysed; getting them there was left to you.
+
+- **`intake <folder>`** — adds new music to the library. Reads the tags the files
+  already carry (title, artist, album, genre, label, remixer, BPM), creates the
+  artist/album/genre/label rows it needs without duplicating existing ones, and
+  leaves every file exactly where it is. Records the batch as a playlist named
+  `_intake <date>`.
+- **`finish`** — checks Rekordbox actually analysed the batch, then reports what the
+  rest of the tool can now do with it. Changes nothing on its own.
+- **`intake --open`** — launches Rekordbox afterwards. It deliberately does not try
+  to click the analysis dialog: driving another application's UI by simulating input
+  fails silently and needs accessibility permissions this tool has no business
+  asking for.
+
+**How the analysis actually works, since it took an experiment to find out.**
+Rekordbox decides what to analyse by looking for collection entries that have no
+analysis yet, and it makes that check at startup. Four identical copies of one file
+were injected with different starting states to find out what it keys off:
+
+| armed with | analysed? |
+|---|---|
+| `Analysed=0`, nothing else | yes |
+| `Analysed=NULL`, nothing else | yes |
+| `Analysed=0` plus a row in `networkAnalyze6.db`'s `manage_tbl` | yes — the queue row was ignored entirely |
+| `Analysed=NULL` plus a pre-assigned `AnalysisDataPath` | yes — used the given path, did not need it |
+
+So the minimum viable entry is a row with `Analysed` left unset. No queue table, no
+path pre-assignment, no dragging to a deck. One confirmation covers the whole batch.
+
+Writing the analysis files directly was ruled out: `pyrekordbox` round-trips `.DAT`
+and `.EXT` byte-identically but cannot rebuild `.2EX`, and Rekordbox 7 also writes a
+fourth format, `.3EX`. Analysis stays Rekordbox's job.
+
+### Also
+
+- **Music root is inferred from the library.** `disk` and `relocate` no longer need
+  `--music-root`: the folder is read off the paths the database already stores.
+  Grouped by drive first, so a library spread over an internal disk and two externals
+  does not collapse to `/`, and strays are dropped before taking the common ancestor
+  so one file in `Downloads` cannot drag the root up a level. It says out loud what
+  it inferred, and distinguishes "no idea" from "your library says the T7, which is
+  unplugged".
+- **Streaming and cloud entries are told apart from local files by path shape.**
+  Rekordbox stores them with a fake absolute path (`/contents_4056005572/...`) that
+  no column in the database distinguishes from a real file — same `FileType`, same
+  `FileSize`, same `AnalysisDataPath`. On the test library that is 2,756 of 3,214
+  entries, and treating them as real files produced a bogus music root.
+- **`intake` catches duplicates inside a single batch** by size plus a hash of the
+  first megabyte, so the same download saved twice under two names does not become
+  two entries with your cues on only one of them.
+
+### Still not run on macOS
+
+Everything above was exercised on Linux against a real Mac library over a mount,
+including the full write path with integrity checks. `launch_rekordbox()`'s
+`open -a rekordbox` branch has never executed. Unchanged from a1: this is the gap.
+
 ## 0.9.0a1 — alpha
 
 First release. Every command has been exercised against a real 3,214-track Rekordbox 7
@@ -26,7 +88,7 @@ Path from here: `b1` once a few people have run it and nothing structural needs 
 then `1.0.0` once it is proven on macOS and Windows both. From `1.0.0` on, anything that
 would break an existing `crate_doctor.ini` requires a major bump.
 
-Eight commands, all read-only unless you pass `--write`.
+Eight commands, all read-only unless you pass `--write`. (Ten as of a2.)
 
 - `setup` — first run. Installs missing packages, finds your library, fetches the
   decryption key, writes a config with your paths, takes a backup. Runs on a bare Python.

@@ -761,10 +761,118 @@ def cmd_sound(a):
 
 # ---------------------------------------------------------------- files
 
+# Directory names that begin a real filesystem path. Rekordbox stores streaming
+# and cloud tracks with a fake absolute path ("/contents_4056005572/artist/album"),
+# which is indistinguishable from a local file by any column in the database --
+# same FileType, same FileSize, same AnalysisDataPath. Path SHAPE is what separates
+# them, and this list changes on the timescale of operating systems, not of vendors.
+LOCAL_ROOTS = ('Volumes', 'Users', 'home', 'mnt', 'media', 'srv', 'run',
+               'data', 'opt', 'private', 'var', 'export', 'storage', 'mount')
+
+
+def path_bucket(d):
+    """The drive a stored path belongs to: /Volumes/T7, /Users/matt, C:\\ ...
+
+    Returns None for anything that is not a plausible local path, which is how
+    streaming stubs get dropped. Grouping by drive before looking for a common
+    ancestor is also what stops a library spread over an internal disk and two
+    externals from collapsing into a single useless root of "/".
+    """
+    m = re.match(r'^([A-Za-z]:)[\\/]', d)
+    if m:
+        return m.group(1) + os.sep
+    parts = [p for p in d.split('/') if p]
+    if not parts:
+        return None
+    if parts[0] in LOCAL_ROOTS:
+        # /Volumes/T7 and /Users/matt are drives; /srv on its own is one too.
+        return '/' + '/'.join(parts[:2]) if len(parts) >= 2 else '/' + parts[0]
+    # Not a name we recognise -- but if it exists on this machine it is real
+    # (someone's /music, a Linux box's /pool). A streaming stub never will.
+    if os.path.isdir('/' + parts[0]):
+        return '/' + parts[0]
+    return None
+
+
+def infer_music_roots(db, min_share=0.05, noise=0.01):
+    """Work out where your music lives from the paths your library already stores.
+
+    Rekordbox keeps an absolute path per track, so the answer is in the database
+    -- there is no need to ask. Group the folders by drive, discard the one-off
+    strays inside each drive, then take the deepest folder that still contains
+    everything left. That is the music root for that drive.
+
+    Returns [(root, tracks, exists)] worst-to-best so the caller can tell the
+    difference between "no idea" and "your library says the T7, which is
+    unplugged" -- two situations that need very different advice.
+    """
+    dirs = collections.Counter()
+    for r in real_tracks(db):
+        fp = r.FolderPath or ''
+        if not (fp.startswith('/') or re.match(r'^[A-Za-z]:[\\/]', fp)):
+            continue
+        d = os.path.dirname(fp.replace('\\', '/'))
+        if d:
+            dirs[d] += 1
+    buckets = collections.defaultdict(collections.Counter)
+    for d, n in dirs.items():
+        b = path_bucket(d)
+        if b:
+            buckets[b][d] += n
+    total = sum(sum(inner.values()) for inner in buckets.values())
+    if not total:
+        return []
+    out = []
+    for b, inner in buckets.items():
+        bt = sum(inner.values())
+        if bt / total < min_share:
+            continue
+        # Drop folders holding a trivial slice of this drive before taking the
+        # common ancestor: one stray track in /Volumes/T7/Downloads should not
+        # drag the root all the way up to /Volumes/T7.
+        keep = [d for d, n in inner.items() if n / bt >= noise] or list(inner)
+        try:
+            root = os.path.commonpath(keep)
+        except ValueError:
+            continue
+        if root and root not in ('/', os.sep):
+            out.append((root, bt, os.path.isdir(root)))
+    out.sort(key=lambda t: -t[1])
+    return out
+
+
+def resolve_roots(a, db, what='scan'):
+    """Use --music-root when given; otherwise read it off the library and say so.
+
+    Inference you cannot see is inference you cannot check, and being able to
+    check it is the whole point.
+    """
+    given = [os.path.abspath(os.path.expanduser(p))
+             for p in (getattr(a, 'music_root', None) or [])]
+    if given:
+        return given
+    found = infer_music_roots(db)
+    if not found:
+        return []
+    live = [r for r, _n, ok in found if ok]
+    dead = [(r, n) for r, n, ok in found if not ok]
+    if live:
+        print("no --music-root given, so reading it from your library:")
+        for r, n, ok in found:
+            if ok:
+                print(f"   {r}   ({n} tracks)")
+    for r, n in dead:
+        print(f"  your library keeps {n} tracks under {r}, but that folder is not\n"
+              f"  there right now -- plug the drive in, or pass --music-root.")
+    if live:
+        print(f"   (pass --music-root to {what} somewhere else)")
+    return live
+
+
 def cmd_disk(a):
     path = db_paths(a.db)
     db = open_ro(path)
-    roots = [os.path.abspath(os.path.expanduser(p)) for p in a.music_root]
+    roots = resolve_roots(a, db, what='scan')
     bad = [p for p in roots if not os.path.isdir(p)]
     if bad:
         sys.exit("not a folder: " + ", ".join(bad) +
@@ -1138,7 +1246,7 @@ def cmd_relocate(a):
         src, dst = a.path_as.split('=', 1)
         remap = (os.path.abspath(os.path.expanduser(src.strip())).rstrip(os.sep),
                  dst.strip().rstrip('/\\'))
-    roots = [os.path.abspath(os.path.expanduser(p)) for p in a.music_root]
+    roots = resolve_roots(a, db, what='search')
     if not remap:
         _warn_mount(a.db)
     bad = [p for p in roots if not os.path.isdir(p)]
@@ -1147,7 +1255,9 @@ def cmd_relocate(a):
                  "\n  Plug the drive in first. A folder that is not there looks exactly\n"
                  "  like a folder where every file has gone missing.")
     if not roots:
-        sys.exit("relocate needs to know where to look:\n"
+        sys.exit("relocate needs to know where to look, and nothing in your library\n"
+                 "gave it away -- every stored path is a cloud stub, or the drives are\n"
+                 "unplugged. Say it explicitly:\n"
                  "  crate_doctor relocate --music-root /path/to/your/music\n"
                  "  (repeat it for each drive, or set music_roots in crate_doctor.ini)")
 
@@ -2071,6 +2181,472 @@ def cmd_rename(a):
           "  keyed to the track, not the filename, so all of that follows automatically.")
 
 
+# Rekordbox will only accept these five container types. .aif is the same format
+# as .aiff and .mp4 the same as .m4a, so translate rather than refuse; anything
+# genuinely unsupported gets named and skipped instead of silently vanishing.
+FILETYPE_ALIAS = {'aif': 'AIFF', 'aiff': 'AIFF', 'wav': 'WAV', 'mp3': 'MP3',
+                  'flac': 'FLAC', 'm4a': 'M4A', 'mp4': 'M4A'}
+
+INTAKE_PREFIX = '_intake '
+
+
+def read_tags(path):
+    """Pull what the file already knows about itself.
+
+    Every DJ store writes different frames, and a track bought from one shop has
+    the label in TPUB while another puts it in a comment. Read the common spots,
+    take the first that answers, and leave the rest to `tags`.
+    """
+    out = {}
+    try:
+        import mutagen
+        m = mutagen.File(path, easy=False)
+    except Exception:
+        return out
+    if m is None:
+        return out
+
+    def first(*keys):
+        for k in keys:
+            v = None
+            try:
+                v = m.tags.get(k) if m.tags is not None else None
+            except Exception:
+                v = None
+            if v is None:
+                continue
+            if isinstance(v, (list, tuple)):
+                v = v[0] if v else None
+            if v is None:
+                continue
+            # ID3 frames stringify to their text; APIC and friends do not.
+            s = getattr(v, 'text', v)
+            if isinstance(s, (list, tuple)):
+                s = s[0] if s else None
+            s = str(s).strip()
+            if s:
+                return s
+        return None
+
+    out['Title'] = first('TIT2', 'title', '\xa9nam', 'TITLE')
+    out['_artist'] = first('TPE1', 'artist', '\xa9ART', 'ARTIST')
+    out['_album'] = first('TALB', 'album', '\xa9alb', 'ALBUM')
+    out['_genre'] = first('TCON', 'genre', '\xa9gen', 'GENRE')
+    out['_label'] = first('TPUB', 'organization', 'publisher', 'LABEL', 'ORGANIZATION')
+    out['_remixer'] = first('TPE4', 'remixer', 'REMIXER')
+    bpm = first('TBPM', 'bpm', 'tmpo', 'BPM')
+    if bpm:
+        try:
+            # The database stores BPM times 100. This is only a hint for the
+            # track list -- Rekordbox overwrites it with the analysed value.
+            out['BPM'] = int(round(float(str(bpm).replace(',', '.')) * 100))
+        except ValueError:
+            pass
+    try:
+        if getattr(m, 'info', None) is not None and getattr(m.info, 'length', None):
+            out['Length'] = int(round(m.info.length))
+            out['SampleRate'] = int(getattr(m.info, 'sample_rate', 0) or 0) or None
+            br = getattr(m.info, 'bitrate', None)
+            if br:
+                out['BitRate'] = int(br // 1000)
+    except Exception:
+        pass
+    if not out.get('Title'):
+        out['Title'] = os.path.splitext(os.path.basename(path))[0]
+    return {k: v for k, v in out.items() if v is not None}
+
+
+def scan_incoming(folders):
+    """Every audio file under the folders given, with size, newest first."""
+    found = []
+    for root in folders:
+        if os.path.isfile(root):
+            if root.lower().endswith(AUDIO_EXT) and not os.path.basename(root).startswith('._'):
+                try:
+                    found.append((root, os.path.getsize(root)))
+                except OSError:
+                    pass
+            continue
+        for dp, dn, fn in os.walk(root):
+            for f in sorted(fn):
+                # macOS writes a "._name" sidecar per file on exFAT volumes. They
+                # carry audio extensions and would double every count here.
+                if f.startswith('._') or not f.lower().endswith(AUDIO_EXT):
+                    continue
+                p = os.path.join(dp, f)
+                try:
+                    found.append((p, os.path.getsize(p)))
+                except OSError:
+                    pass
+    return found
+
+
+def launch_rekordbox():
+    """Start Rekordbox, so the analysis step is a click and not a chore.
+
+    Deliberately does not try to drive the confirmation dialog. Clicking a
+    button in somebody else's application by simulating input is fragile in a
+    way that fails silently, and it needs accessibility permissions this tool
+    has no business asking for. Launching is automation; puppeteering is not.
+    """
+    import subprocess
+    if sys.platform == 'darwin':
+        cmd = ['open', '-a', 'rekordbox']
+    elif os.name == 'nt':
+        for p in (r'C:\\Program Files\\Pioneer\\rekordbox 7.0.0\\rekordbox.exe',
+                  r'C:\\Program Files\\Pioneer\\rekordbox 6.0.0\\rekordbox.exe'):
+            if os.path.exists(p):
+                cmd = [p]
+                break
+        else:
+            found = None
+            base = r'C:\\Program Files\\Pioneer'
+            if os.path.isdir(base):
+                for d in sorted(os.listdir(base), reverse=True):
+                    p = os.path.join(base, d, 'rekordbox.exe')
+                    if os.path.exists(p):
+                        found = p
+                        break
+            if not found:
+                print("  could not find rekordbox.exe -- start Rekordbox yourself.")
+                return False
+            cmd = [found]
+    else:
+        print("  no Rekordbox on this platform -- start it on the machine that has it.")
+        return False
+    try:
+        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return True
+    except Exception as e:
+        print(f"  could not launch Rekordbox ({e}) -- start it yourself.")
+        return False
+
+
+def quick_fingerprint(path, size, nbytes=1 << 20):
+    """Size plus a hash of the first megabyte.
+
+    Enough to spot the same download saved twice under different names, which is
+    the common case, without reading a hundred megabytes per file. Two tracks
+    that genuinely differ will differ inside their first megabyte -- the header
+    alone carries the encoder, duration and tag block.
+    """
+    import hashlib
+    h = hashlib.blake2b(digest_size=16)
+    h.update(str(size).encode())
+    try:
+        with open(path, 'rb') as fh:
+            h.update(fh.read(nbytes))
+    except OSError:
+        return None
+    return h.hexdigest()
+
+
+def cmd_intake(a):
+    """Put new files into the library so Rekordbox will analyse them.
+
+    Rekordbox decides what to analyse by looking for collection entries that have
+    no analysis yet, and it makes that check when it starts up. So the whole job
+    here is to write correct entries and then get out of the way: on the next
+    launch Rekordbox offers to analyse them itself, and one confirmation covers
+    the entire batch however large it is.
+
+    The files are left exactly where they are. A library is a set of pointers,
+    not a filing cabinet, and moving somebody's music because a tool preferred a
+    different layout is not a repair.
+    """
+    folders = [os.path.abspath(os.path.expanduser(p)) for p in a.folder]
+    missing = [p for p in folders if not os.path.exists(p)]
+    if missing:
+        sys.exit("not there: " + ", ".join(missing))
+
+    incoming = scan_incoming(folders)
+    if not incoming:
+        sys.exit("found no audio files under " + ", ".join(folders) +
+                 f"\n  Looked for: {', '.join(AUDIO_EXT)}")
+
+    path = db_paths(a.db)
+    db = open_ro(path)
+
+    # ---- what is already in the library, by path and by name+size
+    have_path, have_ns = set(), {}
+    for r in real_tracks(db):
+        fp = r.FolderPath or ''
+        if fp:
+            have_path.add(fp)
+        fn = nfc(r.FileNameL or os.path.basename(fp))
+        if fn and r.FileSize:
+            have_ns.setdefault((fn, int(r.FileSize)), r)
+    db.close()
+
+    new, already, elsewhere, shadowed, unsupported = [], [], [], [], []
+    for p, sz in incoming:
+        ext = os.path.splitext(p)[1].lstrip('.').lower()
+        if ext not in FILETYPE_ALIAS:
+            unsupported.append(p)
+            continue
+        if p in have_path:
+            already.append(p)
+            continue
+        # Same filename and the same exact byte count is the same track. Adding
+        # it again would give you two entries pointing at one piece of music,
+        # with your cues on only one of them.
+        dup = have_ns.get((nfc(os.path.basename(p)), sz))
+        if dup is not None:
+            # ... unless the thing it matched is a streaming or cloud entry,
+            # which is a stub with no file behind it. Those cannot hold cues and
+            # cannot go on a USB, so the local file you just bought is not a
+            # duplicate of one -- it is the copy that actually works. Add it.
+            if path_bucket(os.path.dirname(dup.FolderPath or '')) is None:
+                shadowed.append((p, dup))
+                new.append((p, sz, FILETYPE_ALIAS[ext]))
+            elif a.force:
+                new.append((p, sz, FILETYPE_ALIAS[ext]))
+            else:
+                elsewhere.append((p, dup))
+            continue
+        new.append((p, sz, FILETYPE_ALIAS[ext]))
+
+    # The same download saved twice under different names is one track, and
+    # adding both would put your cues on one of them and leave the other bare.
+    # Checked here rather than left to `dupes`, because the cheapest moment to
+    # not create a duplicate is before it exists.
+    twice = []
+    if not a.force:
+        seen_fp, keep = {}, []
+        for p, sz, ft in new:
+            fp = quick_fingerprint(p, sz)
+            if fp is not None and fp in seen_fp:
+                twice.append((p, seen_fp[fp]))
+                continue
+            if fp is not None:
+                seen_fp[fp] = p
+            keep.append((p, sz, ft))
+        new = keep
+
+    print(f"\nfound {len(incoming)} audio files under {', '.join(folders)}")
+    print(f"  new to your library:            {len(new)}")
+    print(f"  already in, at this same path:  {len(already)}")
+    print(f"  already in, from another path:  {len(elsewhere)}")
+    print(f"  matching a streaming/cloud stub: {len(shadowed)}  (added -- see below)")
+    if unsupported:
+        print(f"  Rekordbox cannot read:          {len(unsupported)}")
+        for p in unsupported[:a.limit]:
+            print(f"     {os.path.basename(p)[:66]}")
+    if elsewhere:
+        print("\nsame filename and same exact size as a local file you already have --\n"
+              "skipping, so you do not end up with two entries for one track\n"
+              "(--force adds them anyway):")
+        for p, dup in elsewhere[:a.limit]:
+            print(f"   {os.path.basename(p)[:52]}")
+            print(f"      already at  {(dup.FolderPath or '?')[:70]}")
+        if len(elsewhere) > a.limit:
+            print(f"   ... and {len(elsewhere)-a.limit} more")
+    if twice:
+        w1 = "file is" if len(twice) == 1 else "files are"
+        print(f"\n{len(twice)} {w1} the same audio as another file in this same batch,\n"
+              "saved under a different name. Keeping the first of each:")
+        for p, first in twice[:a.limit]:
+            print(f"   {os.path.basename(p)[:52]}")
+            print(f"      same as  {os.path.basename(first)[:60]}")
+        if len(twice) > a.limit:
+            print(f"   ... and {len(twice)-a.limit} more")
+    if shadowed:
+        print(f"\n{len(shadowed)} of these match a streaming or cloud entry you already have.\n"
+              "Adding them anyway: a streaming entry is a stub with no file behind it,\n"
+              "so it cannot take cues and cannot go on a USB. The local file can.")
+        for p, dup in shadowed[:a.limit]:
+            print(f"   {os.path.basename(p)[:60]}")
+        if len(shadowed) > a.limit:
+            print(f"   ... and {len(shadowed)-a.limit} more")
+    if not new:
+        print("\nnothing to add.")
+        return
+
+    print(f"\nwould add {len(new)} tracks:")
+    for p, sz, ft in new[:a.limit]:
+        t = read_tags(p)
+        who = t.get('_artist') or '?'
+        print(f"   {t.get('Title','?')[:40]:42s} {who[:24]:26s} {sz/2**20:6.1f} MB  {ft}")
+    if len(new) > a.limit:
+        print(f"   ... and {len(new)-a.limit} more")
+
+    if not a.write:
+        print("\n  Nothing was written. Add --write to add these to your library.")
+        return
+
+    stamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M')
+    plname = a.playlist or (INTAKE_PREFIX + stamp)
+
+    added, failed = [], []
+    with SafeWrite(path) as w:
+        # Look-up caches. add_artist on a name that already exists would make a
+        # second artist row, and then your library has two Bicep.
+        cache = {'artist': {}, 'album': {}, 'genre': {}, 'label': {}}
+
+        def ref(kind, name):
+            if not name:
+                return None
+            key = name.strip().lower()
+            if key in cache[kind]:
+                return cache[kind][key]
+            getter = {'artist': w.get_artist, 'album': w.get_album,
+                      'genre': w.get_genre, 'label': w.get_label}[kind]
+            adder = {'artist': w.add_artist, 'album': w.add_album,
+                     'genre': w.add_genre, 'label': w.add_label}[kind]
+            row = getter(Name=name.strip()).first()
+            if row is None:
+                row = adder(name.strip())
+            cache[kind][key] = row
+            return row
+
+        for p, sz, ft in new:
+            t = read_tags(p)
+            kw = {k: v for k, v in t.items() if not k.startswith('_')}
+            try:
+                art = ref('artist', t.get('_artist'))
+                if art is not None:
+                    kw['ArtistID'] = art.ID
+                alb = ref('album', t.get('_album'))
+                if alb is not None:
+                    kw['AlbumID'] = alb.ID
+                gen = ref('genre', t.get('_genre'))
+                if gen is not None:
+                    kw['GenreID'] = gen.ID
+                lab = ref('label', t.get('_label'))
+                if lab is not None:
+                    kw['LabelID'] = lab.ID
+                rem = ref('artist', t.get('_remixer'))
+                if rem is not None:
+                    kw['RemixerID'] = rem.ID
+                # Analysed is left unset on purpose. That is the flag Rekordbox
+                # looks for on startup, and an unset one is what gets the track
+                # onto its list. Both 0 and NULL work; do not "helpfully" fill it.
+                c = w.add_content(p, **kw)
+                added.append(c)
+            except Exception as e:
+                failed.append((p, str(e)[:120]))
+
+        if added and not a.no_playlist:
+            # The batch is recorded as a playlist rather than a file on disk, so
+            # `finish` can find it from any machine, and so you can see with your
+            # own eyes in Rekordbox exactly what came in.
+            pl = w.create_playlist(plname)
+            for i, c in enumerate(added, 1):
+                w.add_to_playlist(pl, c, track_no=i)
+
+    print(f"\n  added {len(added)} tracks")
+    if failed:
+        print(f"  {len(failed)} could not be added:")
+        for p, e in failed[:a.limit]:
+            print(f"     {os.path.basename(p)[:44]}  {e}")
+    if added and not a.no_playlist:
+        print(f'  recorded them in a playlist called "{plname}"')
+
+    if a.open:
+        print("\n  starting Rekordbox...")
+        launch_rekordbox()
+        print("  It will offer to analyse the new tracks -- click OK and let it finish.")
+    else:
+        print("\n  NEXT: open Rekordbox (or re-run with --open and it will do that too).")
+        print("  It will offer to analyse the new tracks -- click OK and let it finish.")
+    print("  That one click covers the whole batch, however big; you do not have to")
+    print("  touch the tracks one at a time.")
+    print("\n  Then quit Rekordbox and run:  crate_doctor finish")
+    print("\n  (No dialog? Turn on Preferences > Analysis > Auto Analysis, or select the")
+    print("   tracks in Rekordbox and use right-click > Analyze Track.)")
+
+
+def intake_batches(db):
+    """Every intake playlist, newest first."""
+    out = []
+    for pl in db.get_playlist():
+        nm = pl.Name or ''
+        if nm.startswith(INTAKE_PREFIX):
+            out.append(pl)
+    out.sort(key=lambda p: p.Name or '', reverse=True)
+    return out
+
+
+def is_analysed(r):
+    """Has Rekordbox actually analysed this track?
+
+    Analysed==105 is what a finished track looks like. Checking the analysis file
+    too, because a track can be part-way through -- files written, database row
+    not yet updated -- and calling that 'done' would hand `sound` a track with
+    no waveform to read.
+    """
+    return (r.Analysed or 0) == 105 and bool(r.AnalysisDataPath)
+
+
+def cmd_finish(a):
+    """Second half of intake: check Rekordbox did its part, then do ours.
+
+    Split from `intake` because Rekordbox has to run in between, and a command
+    that cannot finish what it started should not pretend otherwise. This one
+    verifies the analysis landed, then reports what the rest of the tool can now
+    do with the batch -- it changes nothing on its own.
+    """
+    path = db_paths(a.db)
+    db = open_ro(path)
+
+    if a.playlist:
+        pls = [p for p in db.get_playlist() if (p.Name or '') == a.playlist]
+        if not pls:
+            sys.exit(f'no playlist called "{a.playlist}".')
+    else:
+        pls = intake_batches(db)
+        if not pls:
+            sys.exit("no intake batches found.\n"
+                     "  `intake` records each batch as a playlist named "
+                     f'"{INTAKE_PREFIX}<date>", and that is what this command reads.\n'
+                     "  If you added the tracks by hand, name the playlist with --playlist.")
+        if not a.all:
+            pls = pls[:1]
+
+    for pl in pls:
+        # get_playlist_contents yields the tracks themselves, not the join rows.
+        rows = [r for r in db.get_playlist_contents(pl) if r is not None]
+        done = [r for r in rows if is_analysed(r)]
+        todo = [r for r in rows if not is_analysed(r)]
+        print(f'\n{pl.Name}   {len(rows)} tracks')
+        print(f'   analysed:     {len(done)}')
+        print(f'   not analysed: {len(todo)}')
+        if todo:
+            for r in todo[:a.limit]:
+                print(f'      {(r.Title or r.FileNameL or "?")[:60]}')
+            if len(todo) > a.limit:
+                print(f'      ... and {len(todo)-a.limit} more')
+            print("\n  Rekordbox has not analysed these yet, and everything below needs the\n"
+                  "  waveform it produces. Open Rekordbox, let it analyse (or select them\n"
+                  "  and use right-click > Analyze Track), quit, then run this again.")
+            continue
+
+        # ---- what the rest of the tool can now do with this batch
+        ids = {r.ID for r in done}
+        cues = memory_cues(db)
+        nocue = [r for r in done if not cues.get(r.ID)]
+        print(f'\n  all {len(done)} analysed. state of the batch:')
+        print(f'   with no memory cues yet:  {len(nocue)}')
+        rated = len([r for r in done if (r.Rating or 0) > 0])
+        print(f'   rated:                    {rated}')
+        tagged = 0
+        try:
+            live = live_tags(db)
+            tagged = len([r for r in done if live.get(r.ID)])
+        except Exception:
+            pass
+        print(f'   with My Tags:             {tagged}')
+
+        print("\n  NEXT -- run these in order. Each one reports before it changes anything,")
+        print("  and none of them writes without --write:")
+        print(f"\n    crate_doctor sound -o sound.jsonl")
+        print(f"    crate_doctor cues --fix --tag \"CUE(script)\" --target 8")
+        print(f"    crate_doctor tags --propose --sound sound.jsonl")
+        print(f"    crate_doctor playlists --sound sound.jsonl")
+        print("\n  Add --write to the ones whose proposal you agree with.")
+    db.close()
+
+
 def cmd_backup(a):
     path = db_paths(a.db)
     dst, n = backup(path, 'manual')
@@ -2161,6 +2737,22 @@ def main():
     c.add_argument('--limit', type=int, default=15, help='examples to print')
     c.add_argument('--write', action='store_true', help='actually rename')
     c.set_defaults(func=cmd_rename)
+
+    c = sub.add_parser('intake', help="add new music to your library so Rekordbox will analyse it")
+    c.add_argument('folder', nargs='+', help='folder (or file) holding the new music')
+    c.add_argument('--write', action='store_true', help='actually add them; without this it only reports')
+    c.add_argument('--playlist', help='name the batch playlist yourself')
+    c.add_argument('--no-playlist', action='store_true', help='do not record the batch as a playlist')
+    c.add_argument('--force', action='store_true', help='add even files that duplicate a local track you already have')
+    c.add_argument('--open', action='store_true', help='launch Rekordbox afterwards, ready for the analysis click')
+    c.add_argument('--limit', type=int, default=20, help='how many to list in the report (default 20)')
+    c.set_defaults(func=cmd_intake)
+
+    c = sub.add_parser('finish', help="after Rekordbox analysed an intake batch: check it, then act on it")
+    c.add_argument('--playlist', help='a specific batch playlist (default: the newest intake)')
+    c.add_argument('--all', action='store_true', help='every intake batch, not just the newest')
+    c.add_argument('--limit', type=int, default=15)
+    c.set_defaults(func=cmd_finish)
 
     c = sub.add_parser('backup', help="timestamped copy of master.db")
     c.set_defaults(func=cmd_backup)

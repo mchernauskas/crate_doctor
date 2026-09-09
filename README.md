@@ -18,6 +18,8 @@ Read-only unless you type `--write`.
 
 ```
 backup     do this first
+intake     add new music to your library so Rekordbox will analyse it
+finish     after Rekordbox has analysed a batch: check it, then act on it
 cues       your cueing habit, which tracks break it, and --fix to repair them
 sound      per-track energy numbers from the waveform Rekordbox already made
 tags       do my My Tags narrow anything? plus suggestions from 316 researched labels
@@ -171,6 +173,50 @@ right to you.
 ---
 
 ## The commands
+
+### `intake` and `finish` — get new music in, analysed, and organised
+
+New music has to be analysed by Rekordbox before any of the waveform commands can
+say anything about it. `intake` writes the library entries; Rekordbox does the
+analysis; `finish` picks it up from there.
+
+```
+crate_doctor intake ~/Downloads/new-stuff              # look first
+crate_doctor intake ~/Downloads/new-stuff --write      # add them
+crate_doctor intake ~/Downloads/new-stuff --write --open   # ...and launch Rekordbox
+# Rekordbox offers to analyse the new tracks -- click OK, let it finish, quit
+crate_doctor finish
+```
+
+**Your files are not moved.** A library is a set of pointers, not a filing cabinet.
+Keep your music wherever you keep it — one folder, twenty folders, three drives —
+and `intake` records where each file already is. Nothing is copied, renamed or
+relocated. (If you *want* one naming standard afterwards, that is `rename`, and it
+asks first.)
+
+**What it refuses to add:**
+
+| | |
+|---|---|
+| already in your library at that same path | skipped |
+| same filename *and* same exact byte size as a local track you have | skipped (`--force` overrides) |
+| the same audio twice inside one batch, under two names | keeps the first |
+| matches a **streaming or cloud** entry you have | **added** — see below |
+| a format Rekordbox cannot read | skipped, and named |
+
+That last-but-one case is deliberate. A streaming entry is a stub with no file
+behind it: it cannot hold cues and cannot go on a USB. So the local copy you just
+bought is not a duplicate of one, it is the copy that actually works.
+
+**The one click.** Rekordbox decides what to analyse by looking for entries that
+have no analysis yet, and it makes that check when it starts up. So `intake` writes
+correct entries and gets out of the way — on the next launch Rekordbox offers to
+analyse them itself, and that single confirmation covers the whole batch whether it
+is three tracks or three hundred. It cannot be automated away from outside without
+simulating clicks in someone else's application, which this tool will not do.
+
+Each batch is recorded as a playlist named `_intake <date>`, so `finish` can find it
+and so you can see with your own eyes exactly what came in.
 
 ### `cues` — what is my actual cueing habit, and fix it
 

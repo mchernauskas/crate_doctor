@@ -206,6 +206,46 @@ no dependencies installed. Safe to repeat. `--db PATH` `--yes` `--force`
 If a user has just unzipped the folder and nothing works yet, this is the first thing to
 run. The double-click launchers (`setup-mac.command`, `setup-windows.bat`) just call it.
 
+**`intake <folder> [--write] [--open] [--force] [--playlist NAME] [--no-playlist]`** —
+adds new music to the library. Walks the folders for `AUDIO_EXT`, skipping `._*`
+sidecars; reads tags with mutagen; dedupes against the library by exact path and by
+`FileNameL` + exact `FileSize`; dedupes *within* the batch by size + blake2b of the
+first 1 MB. Creates artist/album/genre/label rows via `add_artist` etc., cached by
+lowercased name so one artist does not become two. Calls `db.add_content(path, **kw)`.
+
+**Leaves `Analysed` unset on purpose.** That is the flag Rekordbox scans for at
+startup to decide what to analyse. Both `0` and `NULL` work; a queue row in
+`networkAnalyze6.db` `manage_tbl` is ignored by Rekordbox entirely; a pre-assigned
+`AnalysisDataPath` is honoured but unnecessary. Do not "helpfully" fill `Analysed` in
+— it is what makes the track eligible.
+
+**Do not try to write analysis files.** `pyrekordbox` cannot rebuild `.2EX`
+byte-identically (166,585 bytes vs 174,398, diverging at byte 10), and Rekordbox 7
+writes a fourth format `.3EX` as well. Analysis is Rekordbox's job, full stop.
+
+Records the batch as a playlist named `_intake <date>` (`INTAKE_PREFIX`), which is how
+`finish` finds it — deliberately not a state file on disk, so it works across machines
+and the user can see the batch in Rekordbox.
+
+**`finish [--playlist NAME] [--all]`** — reads the newest `_intake ` playlist,
+checks every track is `Analysed == 105` **and** has an `AnalysisDataPath` (a track
+part-way through has files but no row yet, and calling that done hands `sound` a track
+with no waveform). Read-only; prints the commands to run next.
+
+**Streaming/cloud entries** are stubs with a fake absolute path
+(`/contents_4056005572/artist/album`) and **no database column distinguishes them** —
+same `FileType`, `FileSize`, `AnalysisDataPath`. `path_bucket()` tells them apart by
+path shape against `LOCAL_ROOTS`. They cannot hold cues or go to a USB, so a local
+file matching one is **added**, not skipped. On the reference library this is 2,756 of
+3,214 entries; treating them as real files yields a nonsense music root.
+
+**`infer_music_roots(db)`** — reads the music root off stored paths so `disk` and
+`relocate` need no `--music-root`. Groups by drive via `path_bucket` *first* (else a
+library on three drives collapses to `/`), drops folders under 1% of a drive before
+`os.path.commonpath` (else one stray file in `Downloads` drags the root up a level),
+returns `[(root, count, exists)]` so the caller can distinguish "no idea" from
+"unplugged".
+
 **`backup`** — timestamped, self-contained copy of `master.db`. No flags of its own, but
 two globals matter: `--backup-dir PATH` and `--keep-backups N` (default 5, `0` keeps all),
 both settable as `backups =` and `keep_backups =` under `[paths]` in the config.
