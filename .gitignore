@@ -1,0 +1,11 @@
+features.jsonl
+sound.jsonl
+crate_doctor.ini
+*.plan.json
+crate_doctor_backups/
+__pycache__/
+*.pyc
+build/
+dist/
+*.egg-info/
+.crate_doctor_work*

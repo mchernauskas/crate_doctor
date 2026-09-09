@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "crate-doctor"
+version = "0.9.0a1"
+description = "Audit and repair a Rekordbox library from the command line"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Matt Chernauskas", email = "matt.chernauskas@gmail.com" }]
+maintainers = [{ name = "Hypnotyc Productions LLC" }]
+keywords = ["rekordbox", "dj", "pioneer", "music-library", "cue-points"]
+dependencies = ["pyrekordbox>=0.4", "numpy>=1.20"]
+
+[project.urls]
+Homepage = "https://github.com/mchernauskas/crate_doctor"
+Repository = "https://github.com/mchernauskas/crate_doctor"
+Issues = "https://github.com/mchernauskas/crate_doctor/issues"
+
+[project.scripts]
+# Both spellings, so nobody has to remember which. The hyphen is the usual CLI
+# convention and needs no shift key; the underscore matches the module name.
+crate-doctor = "crate_doctor:main"
+crate_doctor = "crate_doctor:main"
+
+[tool.setuptools]
+py-modules = ["crate_doctor"]
+
+[tool.setuptools.package-data]
+"*" = ["knowledge.json"]
+
+[tool.setuptools.data-files]
+"share/crate_doctor" = ["knowledge.json"]
