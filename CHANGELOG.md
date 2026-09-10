@@ -1,6 +1,32 @@
 # Changelog
 
-## 0.9.0a2 — alpha (unreleased)
+## 0.9.0a4 — alpha
+
+### Cues were written with a contradictory position
+
+A `djmdCue` row records where it is twice: `InMsec` in milliseconds and `InFrame`
+in frames at 150fps. The cue writer set the first and hardcoded the second to
+zero, so every cue this tool placed claimed to be both a minute into the track and
+at frame zero. Rekordbox accepts the row, but goes slow and unresponsive
+reconciling it whenever those cues are clicked.
+
+`InFrame` is now `int(InMsec * 0.15)` -- a relationship that holds for 46,990 of
+46,990 of Rekordbox's own cues, with no exceptions. `ContentUUID` is set to the
+track's UUID as well; all 52,333 of Rekordbox's cues set it and cloud sync uses it.
+
+**Nothing in the test suite could have caught this.** `PRAGMA integrity_check` and
+`foreign_key_check` both passed on every affected write, because neither knows
+that two columns are supposed to agree. It surfaced when the user clicked a cue
+and noticed the application hesitate.
+
+To repair a library already written to, re-run `cues --fix --rebuild --write` with
+the same `--tag`, or see the note in CLAUDE.md.
+
+## 0.9.0a3 — alpha
+
+Verified end to end on macOS. See the notes under 0.9.0a2, which this supersedes.
+
+## 0.9.0a2 — alpha
 
 ### `intake` and `finish`: getting new music in
 

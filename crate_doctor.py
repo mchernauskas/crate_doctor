@@ -886,15 +886,26 @@ def fix_cues(a):
                         c.rb_local_synced = 0
                         c.updated_at = now
                         break
+        # A cue carries its position TWICE: InMsec in milliseconds and InFrame in
+        # frames at 150fps. Rekordbox writes both and reads both. Writing InFrame=0
+        # while InMsec says 60 seconds leaves every cue self-contradictory, and
+        # Rekordbox becomes slow and unresponsive reconciling it on each click.
+        # Measured across 46,990 of Rekordbox's own cues, InFrame is exactly
+        # int(InMsec * 0.15), with no exceptions.
+        #
+        # ContentUUID must be the track's UUID as well -- all 52,333 of Rekordbox's
+        # cues set it, and cloud sync keys on it.
+        uuid_of = {str(r.ID): r.UUID for r in db.get_content()}
         for cid, msl in plan_add.items():
             for ms in msl:
                 db.add(tables.DjmdCue.create(
                     ID=str(uuid.uuid4()), ContentID=str(cid), InMsec=int(ms),
-                    InFrame=0, InMpegFrame=0, InMpegAbs=0,
+                    InFrame=int(int(ms) * 0.15), InMpegFrame=0, InMpegAbs=0,
                     OutMsec=-1, OutFrame=0, OutMpegFrame=0, OutMpegAbs=0,
                     Kind=0, Color=-1, ColorTableIndex=0, ActiveLoop=0,
                     Comment=a.tag or '', BeatLoopSize=0, CueMicrosec=0,
-                    InPointSeekInfo=None, OutPointSeekInfo=None, ContentUUID=None,
+                    InPointSeekInfo=None, OutPointSeekInfo=None,
+                    ContentUUID=uuid_of.get(str(cid)),
                     UUID=str(uuid.uuid4()), rb_data_status=0, rb_local_data_status=0,
                     rb_local_deleted=0, rb_local_synced=0,
                     created_at=now, updated_at=now))

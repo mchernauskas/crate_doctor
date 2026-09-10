@@ -206,6 +206,24 @@ no dependencies installed. Safe to repeat. `--db PATH` `--yes` `--force`
 If a user has just unzipped the folder and nothing works yet, this is the first thing to
 run. The double-click launchers (`setup-mac.command`, `setup-windows.bat`) just call it.
 
+**Writing a cue: `InFrame` is NOT optional.** A `djmdCue` row stores its position
+twice -- `InMsec` in milliseconds and `InFrame` in frames at exactly 150fps. Both
+must agree:
+
+```python
+InFrame = int(InMsec * 0.15)      # holds for 46,990 of 46,990 Rekordbox cues
+```
+
+Writing `InFrame=0` alongside a real `InMsec` leaves every cue self-contradictory.
+Rekordbox does not reject it and no integrity check catches it -- `PRAGMA
+integrity_check` and `foreign_key_check` do not know two columns are meant to
+agree -- but the app becomes visibly slow and unresponsive when clicking those
+cues. This shipped once, on 4,497 cues, and was found only because the user
+noticed clicking felt wrong.
+
+`ContentUUID` must also be set to the track's `UUID`. All 52,333 of Rekordbox's
+own cues set it; cloud sync keys on it.
+
 **`intake <folder> [--write] [--open] [--force] [--playlist NAME] [--no-playlist]`** —
 adds new music to the library. Walks the folders for `AUDIO_EXT`, skipping `._*`
 sidecars; reads tags with mutagen; dedupes against the library by exact path and by
