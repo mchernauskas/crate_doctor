@@ -206,6 +206,27 @@ no dependencies installed. Safe to repeat. `--db PATH` `--yes` `--force`
 If a user has just unzipped the folder and nothing works yet, this is the first thing to
 run. The double-click launchers (`setup-mac.command`, `setup-windows.bat`) just call it.
 
+**Writing a cue: the `ID` must be numeric.** `djmdCue.ID` is a TEXT column, but
+Rekordbox only ever stores a 32-bit unsigned integer in it — all 26,377 cues on the
+reference library are numeric strings like `'376278304'`. Put a UUID there and
+SQLite accepts it happily, every integrity check passes, the cue appears in
+Rekordbox at the right place with the right name — **and clicking it hangs the
+application.** Rekordbox parses the ID back to an integer on access and takes a
+failure path each time.
+
+```python
+ID = str(random.randint(1, 4294967295))   # not str(uuid.uuid4())
+```
+
+This cost most of a session to find, because the ID column looks per-row-unique and
+therefore gets excluded from any field-by-field comparison as "obviously different".
+It is different per row; it is not supposed to be a different KIND of value. When
+diffing rows you wrote against rows Rekordbox wrote, compare the *shape* of the
+identifiers too, not just the payload columns.
+
+Confirmed by elimination: same positions, `InFrame` correct, `rb_local_usn` NULL,
+loop fields NULL — slow with UUID ids, fast with numeric ids.
+
 **Writing a cue: `InFrame` is NOT optional.** A `djmdCue` row stores its position
 twice -- `InMsec` in milliseconds and `InFrame` in frames at exactly 150fps. Both
 must agree:

@@ -60,7 +60,7 @@ is their trademark, used here only to describe what this tool reads.
 MIT licence. No warranty. Back up your library.
 """
 
-import argparse, collections, configparser, datetime, json, logging, os, re, shutil, statistics, sys, time, unicodedata, uuid
+import argparse, collections, configparser, datetime, json, logging, os, random, re, shutil, statistics, sys, time, unicodedata, uuid
 
 # Dependencies are imported lazily so that `crate_doctor setup` can run on a bare Python and
 # install them for you. Every other command calls require_deps() first.
@@ -896,10 +896,24 @@ def fix_cues(a):
         # ContentUUID must be the track's UUID as well -- all 52,333 of Rekordbox's
         # cues set it, and cloud sync keys on it.
         uuid_of = {str(r.ID): r.UUID for r in db.get_content()}
+        # The ID column is a 32-bit unsigned integer stored as text. Every one of
+        # the 26,377 cues Rekordbox wrote on this reference library is numeric;
+        # a UUID here is accepted by SQLite and then behaves badly in the
+        # application -- cues become slow and unresponsive to click, presumably
+        # because Rekordbox parses the ID back to an int and takes a failure path
+        # every time. Nothing in the database complains: it is a TEXT column and
+        # a UUID is valid text.
+        taken = {str(c.ID) for c in db.get_cue()}
+        def new_cue_id():
+            while True:
+                i = str(random.randint(1, 4294967295))
+                if i not in taken:
+                    taken.add(i)
+                    return i
         for cid, msl in plan_add.items():
             for ms in msl:
                 db.add(tables.DjmdCue.create(
-                    ID=str(uuid.uuid4()), ContentID=str(cid), InMsec=int(ms),
+                    ID=new_cue_id(), ContentID=str(cid), InMsec=int(ms),
                     InFrame=int(int(ms) * 0.15), InMpegFrame=0, InMpegAbs=0,
                     OutMsec=-1, OutFrame=0, OutMpegFrame=0, OutMpegAbs=0,
                     Kind=0, Color=-1, ColorTableIndex=0, ActiveLoop=0,

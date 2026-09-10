@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.9.0a5 — alpha
+
+### Cue IDs must be numeric, or Rekordbox hangs when you click them
+
+`djmdCue.ID` is a TEXT column and the cue writer filled it with a UUID. SQLite
+accepts that, `integrity_check` and `foreign_key_check` both pass, and the cue shows
+up in Rekordbox at the correct position with the correct name. But **clicking it
+makes the application hang** — Rekordbox stores a 32-bit unsigned integer there
+(every one of the 26,377 cues it wrote on the reference library is numeric) and
+parses it back to an int on access.
+
+Now `str(random.randint(1, 4294967295))`, checked against existing IDs.
+
+Found only after a user reported that cues placed by this tool felt unresponsive
+while their own felt fine. Three earlier fixes to the same symptom — `InFrame=0`,
+`rb_local_usn` being set where Rekordbox leaves it NULL, and four loop/colour fields
+set to `0` instead of `NULL` — were all genuine defects and are all still worth
+having, but none of them was the cause. Confirmed by elimination: identical
+positions and identical values in every other column, slow with UUID ids and fast
+with numeric ones.
+
+**Why it took so long:** four separate column-by-column comparisons were run against
+Rekordbox's own cues, and all four excluded `ID` as "obviously different per row".
+It is different per row. It was not supposed to be a different kind of value.
+
 ## 0.9.0a4 — alpha
 
 ### Cues were written with a contradictory position
