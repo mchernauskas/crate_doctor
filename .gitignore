@@ -20,3 +20,5 @@ TEST-ON-MY-MAC.command
 mactest.sh
 MAC-TEST-RESULTS.txt
 _sandbox_test/
+INSPECT-DIALOG.command
+COMMIT_MSG.txt

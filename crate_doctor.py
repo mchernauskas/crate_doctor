@@ -60,7 +60,7 @@ is their trademark, used here only to describe what this tool reads.
 MIT licence. No warranty. Back up your library.
 """
 
-import argparse, collections, configparser, datetime, json, logging, os, re, shutil, statistics, sys, unicodedata, uuid
+import argparse, collections, configparser, datetime, json, logging, os, re, shutil, statistics, sys, time, unicodedata, uuid
 
 # Dependencies are imported lazily so that `crate_doctor setup` can run on a bare Python and
 # install them for you. Every other command calls require_deps() first.
@@ -358,6 +358,125 @@ class SafeWrite:
 
 # ---------------------------------------------------------------- helpers
 
+class Progress:
+    """Show the work during the slow parts.
+
+    `sound` opens three analysis files per track and takes minutes on a real
+    library; `rename` and `disk` walk every folder you own; `intake` reads a
+    megabyte of every incoming file. Four minutes of silence reads as a hang,
+    and people kill it and assume the tool is broken.
+
+    Writes to stderr, so piping stdout to a file still gives clean output. On a
+    terminal it redraws one line in place; with no terminal (a log file, CI) it
+    prints a line every 10% instead of thousands of carriage returns. Below
+    `min_total` items it stays quiet -- a job that takes two seconds does not
+    need a progress bar.
+    """
+
+    def __init__(self, total, label, unit='tracks', min_total=150):
+        self.total = max(0, int(total or 0))
+        self.label = label
+        self.unit = unit
+        self.n = 0
+        self.t0 = time.time()
+        self.last_draw = 0.0
+        self.last_pct = -1
+        self.tty = False
+        try:
+            self.tty = sys.stderr.isatty()
+        except Exception:
+            pass
+        self.on = self.total >= min_total
+        if self.on:
+            self._draw(force=True)
+
+    @staticmethod
+    def _clock(sec):
+        sec = int(max(0, sec))
+        if sec < 60:
+            return f"{sec}s"
+        if sec < 3600:
+            return f"{sec // 60}m {sec % 60:02d}s"
+        return f"{sec // 3600}h {(sec % 3600) // 60:02d}m"
+
+    def _draw(self, force=False):
+        if not self.on:
+            return
+        now = time.time()
+        pct = int(100 * self.n / self.total) if self.total else 100
+        if self.tty:
+            # Four redraws a second is smooth to read and cheap to write.
+            if not force and now - self.last_draw < 0.25:
+                return
+            self.last_draw = now
+            el = now - self.t0
+            rate = self.n / el if el > 0.5 and self.n else 0
+            eta = (self.total - self.n) / rate if rate > 0 else 0
+            bar = '#' * (pct * 24 // 100)
+            tail = f"  {rate:.0f}/s, {self._clock(eta)} left" if rate else ""
+            line = f"  {self.label}: {bar:<24} {pct:3d}%  {self.n}/{self.total} {self.unit}{tail}"
+            sys.stderr.write("\r" + line[:110].ljust(110))
+            sys.stderr.flush()
+        else:
+            if force or pct >= self.last_pct + 10:
+                self.last_pct = pct - (pct % 10)
+                print(f"  {self.label}: {pct}%  ({self.n}/{self.total} {self.unit})",
+                      file=sys.stderr, flush=True)
+
+    def step(self, n=1):
+        self.n += n
+        self._draw()
+
+    def done(self, note=''):
+        if not self.on:
+            return
+        el = time.time() - self.t0
+        if self.tty:
+            sys.stderr.write("\r" + " " * 110 + "\r")
+            sys.stderr.flush()
+        msg = f"  {self.label}: {self.n} {self.unit} in {self._clock(el)}"
+        if note:
+            msg += f" -- {note}"
+        print(msg, file=sys.stderr, flush=True)
+
+
+class Spinner:
+    """For work with no countable total, like walking a drive.
+
+    Reports what it has found so far rather than a percentage, because a
+    percentage it cannot compute is worse than no percentage at all.
+    """
+
+    def __init__(self, label, unit='files', every=0.4):
+        self.label = label
+        self.unit = unit
+        self.every = every
+        self.n = 0
+        self.t0 = time.time()
+        self.last = 0.0
+        try:
+            self.tty = sys.stderr.isatty()
+        except Exception:
+            self.tty = False
+
+    def step(self, n=1):
+        self.n += n
+        now = time.time()
+        if not self.tty or now - self.last < self.every:
+            return
+        self.last = now
+        sys.stderr.write(f"\r  {self.label}: {self.n} {self.unit} so far...".ljust(70))
+        sys.stderr.flush()
+
+    def done(self):
+        el = time.time() - self.t0
+        if self.tty:
+            sys.stderr.write("\r" + " " * 70 + "\r")
+            sys.stderr.flush()
+        if self.n and el > 1.0:
+            print(f"  {self.label}: {self.n} {self.unit} in {Progress._clock(el)}",
+                  file=sys.stderr, flush=True)
+
 def nfc(s):
     """macOS stores filenames decomposed, the database stores them composed.
     Compare them without this and every track with an accent looks like an orphan."""
@@ -554,11 +673,22 @@ def fix_cues(a):
     dbro = open_ro(path)
     cues = memory_cues(dbro)
     floor, target, minspace = a.floor_bars, a.target, a.min_space
+    try:
+        anchors = sorted({int(x) for x in str(a.anchor_bars).split(',') if x.strip()})
+    except ValueError:
+        sys.exit(f"--anchor-bars wants a comma-separated list of bar numbers, got {a.anchor_bars!r}")
+    snap = max(0, int(a.snap))
+    if anchors:
+        print("anchor bars: " + ", ".join(str(x) for x in anchors) +
+              ("   snap to the 8-grid within %d bars" % snap if snap else "   (snap off)"))
     plan_del, plan_add = collections.defaultdict(list), collections.defaultdict(list)
     skipped = 0
 
     errors = []
-    for r in real_tracks(dbro):
+    _rows = list(real_tracks(dbro))
+    prog = Progress(len(_rows), 'checking cues', 'tracks')
+    for r in _rows:
+        prog.step()
         cid = str(r.ID)
         allc = cues.get(cid, [])
         # 'ours' is what this run may delete. 'allc' is what it must respect: with --tag,
@@ -569,10 +699,19 @@ def fix_cues(a):
             continue
         bpm = r.BPM / 100.0
         # 1. cues with too little runway
-        for c in ours:
-            t = (c.InMsec or 0) / 1000.0
-            if (r.Length - t) * bpm / 240.0 < floor:
+        if a.rebuild:
+            # Throw away every cue this run owns and place them again from
+            # scratch. Topping up cannot fix a track that is already at target
+            # but has its cues in the wrong places -- and a script's own earlier
+            # output is exactly the thing it should be willing to redo. Cues
+            # outside the tag are still never touched.
+            for c in ours:
                 plan_del[cid].append(c.InMsec or 0)
+        else:
+            for c in ours:
+                t = (c.InMsec or 0) / 1000.0
+                if (r.Length - t) * bpm / 240.0 < floor:
+                    plan_del[cid].append(c.InMsec or 0)
         if not target:
             continue
         # 2. top back up, outro cue first
@@ -605,6 +744,19 @@ def fix_cues(a):
                 b = outro_cue(kb, bars, endbar, have, a.outro_lo, a.outro_hi, ph, minspace)
                 if b:
                     picks.append(b[0])
+            # ---- where a cue could go, and how much each position is worth.
+            #
+            # The weights below are not taste, they are measured. Across 2,762
+            # tracks of vetted memory cues, the bars that actually carry a cue
+            # fall into three clear tiers:
+            #
+            #     bar 0    94%  |  bar 32   81%     anchors
+            #     bar 16   51%  |  bar 48   54%  |  bar 64  53%     the 16-grid
+            #     bar 8    13%  |  bar 24   19%  |  bar 40  25%     sparing
+            #
+            # So the shape is a 32-bar skeleton, with 16s filling in about half
+            # the time and the odd 8s reserved for tracks that ask for them. A
+            # flat "every 16 bars" misses that entirely.
             cand = {}
             for k in range(2, endbar - int(floor)):
                 d = kb[k:k + 4].mean() - kb[max(0, k - 4):k].mean()
@@ -613,16 +765,72 @@ def fix_cues(a):
             for k in ph:
                 if 1 <= k < endbar - floor:
                     cand[k] = max(cand.get(k, 0), 1.6)
-            for k in range(16, max(17, endbar - int(floor)), 16):
-                cand.setdefault(k, 0.6)
-            for k, _sc in sorted(cand.items(), key=lambda x: -x[1]):
-                if len(keep) + len(picks) >= target:
-                    break
-                if any(abs(k - h) < minspace for h in have):
-                    continue
-                if any(abs(k - k2) < minspace for k2 in picks):
-                    continue
-                picks.append(k)
+            # The grid is a bonus on bars the music already marks, not a reason
+            # on its own. Weighting bar 16 unconditionally makes it fire on nearly
+            # every track; in this library it carries a cue about half the time,
+            # because the other half go straight from the top to bar 32. So a grid
+            # bar scores its full tier only when a phrase boundary or an energy
+            # change is sitting on it, and a weak fallback otherwise.
+            for k in range(8, max(9, endbar - int(floor)), 8):
+                backed = any(abs(k - p) <= 2 for p in ph) or cand.get(k, 0) >= 1.5
+                if k % 32 == 0:
+                    tier = 1.2 if backed else 0.75
+                elif k % 16 == 0:
+                    tier = 0.9 if backed else 0.45
+                else:
+                    tier = 0.25 if backed else 0.15
+                cand[k] = max(cand.get(k, 0), tier)
+
+            # Anchors outrank everything. These are the bars that are occupied in
+            # four out of five of your tracks, so unless something is already
+            # sitting there they get a cue before any energy event does.
+            for k in anchors:
+                # 0 <= , not 0 < . Bar 0 is the single most occupied position in
+                # this library (94%) and excluding it meant --rebuild stripped the
+                # opening downbeat from every track it touched.
+                if 0 <= k < endbar - floor:
+                    # Strong, not absolute. On a track where the anchor bar falls in
+                    # a dead patch -- a long ambient intro, a breakdown that happens
+                    # to sit there -- the music wins. That is why the measured
+                    # occupancy is 81% and not 100%.
+                    dead = k < len(kb) and kb[k] < 0.25 and not any(abs(k - p) <= 2 for p in ph)
+                    cand[k] = max(cand.get(k, 0), 1.0 if dead else 3.0)
+
+            # Pull near-misses onto the 8-grid. An energy event two bars off a
+            # phrase boundary is the same musical moment as the boundary, and 90%
+            # of the cues in this library sit on a multiple of 8. Tracks that
+            # genuinely do not work that way keep their off-grid position rather
+            # than being forced -- the grid is a strong habit, not a rule.
+            if snap:
+                snapped = {}
+                for k, sc in cand.items():
+                    g = int(round(k / 8.0)) * 8
+                    if g != k and abs(g - k) <= snap and 0 < g < endbar - floor:
+                        snapped[g] = max(snapped.get(g, 0), sc)
+                    else:
+                        snapped[k] = max(snapped.get(k, 0), sc)
+                cand = snapped
+            # Two passes, because spacing is not one number. In this library
+            # 16 bars is the ordinary gap (41%) and 8 is the exception (11%),
+            # and the exceptions cluster on breakdowns and drops -- an 8-bar
+            # step is something the music earns, never filler used to reach a
+            # target. So: fill at the roomy spacing first, and only then allow
+            # tight ones, and only for candidates that are a real event.
+            wide = max(minspace, 16)
+            ordered = sorted(cand.items(), key=lambda x: -x[1])
+            for need_score, gap in ((0.0, wide), (1.5, minspace)):
+                for k, sc in ordered:
+                    if len(keep) + len(picks) >= target:
+                        break
+                    if sc < need_score:
+                        continue
+                    if k in picks:
+                        continue
+                    if any(abs(k - h) < gap for h in have):
+                        continue
+                    if any(abs(k - k2) < gap for k2 in picks):
+                        continue
+                    picks.append(k)
             # never exceed the target: drop tail-most cues OF OURS to make room.
             # Hand-set cues are never candidates, so with --tag on a track that already
             # has more hand cues than the target, nothing is removed and nothing added.
@@ -642,6 +850,7 @@ def fix_cues(a):
             if len(errors) < 3:
                 errors.append(f"{(r.Title or '?')[:40]}: {e.__class__.__name__}: {e}")
 
+    prog.done()
     plan_del = {k: v for k, v in plan_del.items() if v}
     plan_add = {k: v for k, v in plan_add.items() if v}
     ndel = sum(len(v) for v in plan_del.values())
@@ -704,9 +913,9 @@ def cmd_sound(a):
     if a.limit:
         rows = rows[:a.limit]
     total = len(rows)
+    prog = Progress(total, 'reading waveforms', 'tracks')
     for i, r in enumerate(rows):
-        if a.out and i % 100 == 0:
-            print(f"  {i}/{total}", file=sys.stderr, flush=True)
+        prog.step()
         try:
             dat, ext, ex2 = anlz(db, r)
             if dat is None or ext is None or not r.Length:
@@ -743,12 +952,11 @@ def cmd_sound(a):
             }
             out.write(json.dumps(rec) + '\n')
             n += 1
-            if a.out and n % 250 == 0:
-                print(f"  {n} tracks...", file=sys.stderr)
         except Exception as e:
             err += 1
             if len(errors) < 3:
                 errors.append(f"{(r.Title or '?')[:40]}: {e.__class__.__name__}: {e}")
+    prog.done()
     if a.out:
         out.close()
         print(f"wrote {n} tracks to {a.out}" + (f" ({err} skipped)" if err else ""))
@@ -879,6 +1087,7 @@ def cmd_disk(a):
                  "\n  If that drive is unplugged, plug it in — a folder that is not there\n"
                  "  looks exactly like a folder where every file has gone missing.")
     disk = {}
+    _spin = Spinner('scanning your drive', 'audio files')
     for root in roots:
         for dp, dn, fn in os.walk(root):
             for f in fn:
@@ -889,6 +1098,7 @@ def cmd_disk(a):
                 p = os.path.join(dp, f)
                 try:
                     disk[p] = (nfc(f), os.path.getsize(p))
+                    _spin.step()
                 except OSError:
                     pass
     if roots and not disk:
@@ -2076,12 +2286,49 @@ def cmd_rename(a):
     db = open_ro(path)
     artists = {str(x.ID): x.Name for x in db.query(tables.DjmdArtist).all()}
 
+    # Rekordbox's Cloud Library Sync records an entry as "/contents_<id>/artist/..."
+    # while the file itself sits in your music folder. That path never exists, so a
+    # plain os.path.exists check calls thousands of real tracks missing. Index the
+    # music folders and resolve those entries by filename + exact byte size, the
+    # same way `relocate` and `disk` do.
+    roots = resolve_roots(a, db, what='search')
+    ondisk = {}
+    _spin = Spinner('indexing your music folders', 'audio files')
+    for root in roots:
+        for dp, dn, fn in os.walk(root):
+            for f in fn:
+                if f.startswith('._') or not f.lower().endswith(AUDIO_EXT):
+                    continue
+                fpp = os.path.join(dp, f)
+                try:
+                    ondisk.setdefault((nfc(f), os.path.getsize(fpp)), fpp)
+                    _spin.step()
+                except OSError:
+                    pass
+    _spin.done()
+    if ondisk:
+        print(f"indexed {len(ondisk)} audio files to resolve cloud-synced entries")
+
     plan, skipped = [], collections.Counter()
+    cloudfound = []
     taken = collections.Counter()
     for r in real_tracks(db):
         fp = r.FolderPath or ''
         if not fp or not os.path.exists(fp):
-            skipped['file not found on disk'] += 1
+            real = ondisk.get((nfc(r.FileNameL or ''), int(r.FileSize or 0)))
+            if real is None:
+                skipped['file not found on disk'] += 1
+            elif path_bucket(os.path.dirname(fp)) is None:
+                # Stored path is not a real filesystem path at all -- that is
+                # Cloud Library Sync. The file is there, but rename rewrites
+                # FolderPath, and repointing a synced entry at a local path
+                # would break the sync. Not a call this tool makes quietly.
+                cloudfound.append((r, real))
+                skipped['cloud-synced entry: file IS on disk, see note'] += 1
+            else:
+                # A real path that simply is not there any more: the file moved.
+                # That is `relocate`'s job, not rename's.
+                skipped['file moved -- run `relocate` first'] += 1
             continue
         if not (r.Title and str(r.ArtistID) in artists):
             skipped['no artist or title in the database'] += 1
@@ -2111,6 +2358,16 @@ def cmd_rename(a):
     print(f"  files to rename : {len(plan)}")
     for k, v in skipped.most_common():
         print(f"  skipped ({v}): {k}")
+    if cloudfound:
+        print(f"\n  {len(cloudfound)} of those are Rekordbox Cloud Library Sync entries. Their files\n"
+              "  ARE on your drive -- the database just records them under a '/contents_.../'\n"
+              "  cloud path instead of the real one. Renaming a file also rewrites the path\n"
+              "  stored for it, and repointing a synced entry at a local path would break the\n"
+              "  sync, so they are left alone. Examples:")
+        for r, real in cloudfound[:3]:
+            print(f"     {(r.FileNameL or '?')[:62]}")
+            print(f"        recorded: {(r.FolderPath or '')[:64]}")
+            print(f"        actually: {real[:64]}")
     print()
     for _cid, old, new in plan[:a.limit]:
         print(f"   {os.path.basename(old)}")
@@ -2259,6 +2516,7 @@ def read_tags(path):
 def scan_incoming(folders):
     """Every audio file under the folders given, with size, newest first."""
     found = []
+    _spin = Spinner('looking for audio', 'files')
     for root in folders:
         if os.path.isfile(root):
             if root.lower().endswith(AUDIO_EXT) and not os.path.basename(root).startswith('._'):
@@ -2276,8 +2534,10 @@ def scan_incoming(folders):
                 p = os.path.join(dp, f)
                 try:
                     found.append((p, os.path.getsize(p)))
+                    _spin.step()
                 except OSError:
                     pass
+    _spin.done()
     return found
 
 
@@ -2359,6 +2619,28 @@ def cmd_intake(a):
     if missing:
         sys.exit("not there: " + ", ".join(missing))
 
+    # The path we FIND a file at is not always the path that belongs in the
+    # database. Reach the drive through a mount that is not where Rekordbox sees
+    # it -- a container, a VM share, a different mount point -- and storing the
+    # path we walked gives every new entry a folder Rekordbox cannot open. It
+    # then shows the track as missing and will not analyse it. Same hazard as
+    # `relocate`, same flag.
+    remap = None
+    if getattr(a, 'path_as', None):
+        if '=' not in a.path_as:
+            sys.exit("--path-as needs the form SEARCHED=STORED, "
+                     "e.g. --path-as /mnt/T7=/Volumes/T7")
+        src, dst = a.path_as.split('=', 1)
+        remap = (os.path.abspath(os.path.expanduser(src.strip())).rstrip(os.sep),
+                 dst.strip().rstrip('/\\'))
+    else:
+        _warn_mount(a.db)
+
+    def stored_path(p):
+        if remap and (p == remap[0] or p.startswith(remap[0] + os.sep)):
+            return remap[1] + p[len(remap[0]):].replace(os.sep, '/')
+        return p
+
     incoming = scan_incoming(folders)
     if not incoming:
         sys.exit("found no audio files under " + ", ".join(folders) +
@@ -2392,14 +2674,17 @@ def cmd_intake(a):
         # with your cues on only one of them.
         dup = have_ns.get((nfc(os.path.basename(p)), sz))
         if dup is not None:
-            # ... unless the thing it matched is a streaming or cloud entry,
-            # which is a stub with no file behind it. Those cannot hold cues and
-            # cannot go on a USB, so the local file you just bought is not a
-            # duplicate of one -- it is the copy that actually works. Add it.
-            if path_bucket(os.path.dirname(dup.FolderPath or '')) is None:
+            # A cloud path is NOT evidence that there is no file. Rekordbox's
+            # Cloud Library Sync stores entries as "/contents_<id>/artist/album/..."
+            # while the actual file sits in your music folder -- on the library
+            # this was built against, 2,116 of 2,756 such entries resolve to a
+            # real file on disk. Adding the local copy of one would split your
+            # cues and play history across two rows for the same track.
+            #
+            # So: same filename and same exact byte count is a duplicate, whatever
+            # the stored path looks like. --force overrides, and says how many.
+            if a.force:
                 shadowed.append((p, dup))
-                new.append((p, sz, FILETYPE_ALIAS[ext]))
-            elif a.force:
                 new.append((p, sz, FILETYPE_ALIAS[ext]))
             else:
                 elsewhere.append((p, dup))
@@ -2413,7 +2698,9 @@ def cmd_intake(a):
     twice = []
     if not a.force:
         seen_fp, keep = {}, []
+        _fp = Progress(len(new), 'checking for duplicate audio', 'files', min_total=40)
         for p, sz, ft in new:
+            _fp.step()
             fp = quick_fingerprint(p, sz)
             if fp is not None and fp in seen_fp:
                 twice.append((p, seen_fp[fp]))
@@ -2422,19 +2709,23 @@ def cmd_intake(a):
                 seen_fp[fp] = p
             keep.append((p, sz, ft))
         new = keep
+        _fp.done()
 
     print(f"\nfound {len(incoming)} audio files under {', '.join(folders)}")
     print(f"  new to your library:            {len(new)}")
     print(f"  already in, at this same path:  {len(already)}")
     print(f"  already in, from another path:  {len(elsewhere)}")
-    print(f"  matching a streaming/cloud stub: {len(shadowed)}  (added -- see below)")
+    if shadowed:
+        print(f"  forced in despite a match:      {len(shadowed)}  (see the warning below)")
     if unsupported:
         print(f"  Rekordbox cannot read:          {len(unsupported)}")
         for p in unsupported[:a.limit]:
             print(f"     {os.path.basename(p)[:66]}")
     if elsewhere:
-        print("\nsame filename and same exact size as a local file you already have --\n"
-              "skipping, so you do not end up with two entries for one track\n"
+        print("\nsame filename and same exact size as a track you already have --\n"
+              "skipping, so you do not end up with two entries for one piece of music.\n"
+              "A '/contents_...' path below is Rekordbox Cloud Library Sync: the entry\n"
+              "is real and its file is on your drive, just recorded under a cloud path.\n"
               "(--force adds them anyway):")
         for p, dup in elsewhere[:a.limit]:
             print(f"   {os.path.basename(p)[:52]}")
@@ -2451,11 +2742,13 @@ def cmd_intake(a):
         if len(twice) > a.limit:
             print(f"   ... and {len(twice)-a.limit} more")
     if shadowed:
-        print(f"\n{len(shadowed)} of these match a streaming or cloud entry you already have.\n"
-              "Adding them anyway: a streaming entry is a stub with no file behind it,\n"
-              "so it cannot take cues and cannot go on a USB. The local file can.")
+        print(f"\n!! --force is adding {len(shadowed)} files that match a track you already\n"
+              "   have, by filename and exact byte size. If those matches are real, you are\n"
+              "   about to get two library entries per track, and your cues and play history\n"
+              "   will only be on one of them. Check this list before you commit to it.")
         for p, dup in shadowed[:a.limit]:
-            print(f"   {os.path.basename(p)[:60]}")
+            print(f"   {os.path.basename(p)[:56]}")
+            print(f"      matches  {(dup.FolderPath or '?')[:66]}")
         if len(shadowed) > a.limit:
             print(f"   ... and {len(shadowed)-a.limit} more")
     if not new:
@@ -2469,6 +2762,19 @@ def cmd_intake(a):
         print(f"   {t.get('Title','?')[:40]:42s} {who[:24]:26s} {sz/2**20:6.1f} MB  {ft}")
     if len(new) > a.limit:
         print(f"   ... and {len(new)-a.limit} more")
+
+    # Show the path that will actually land in the database. Telling someone to
+    # "check the dry run" is empty advice if the dry run does not print the one
+    # value that can be silently wrong.
+    ex = stored_path(new[0][0])
+    print(f"\n  paths will be stored as, e.g.:\n     {ex}")
+    if ex != new[0][0]:
+        print(f"  (walked as {new[0][0]})")
+    elif remap is None and any(m in ex for m in ('/sessions/', '/mnt/', '/media/', '/run/')):
+        print("  !! That looks like a mount path, not a path Rekordbox can open. If the\n"
+              "     drive is at a different place for Rekordbox, pass --path-as, e.g.\n"
+              f"     --path-as {os.path.dirname(os.path.dirname(ex))}=/Volumes/YOURDRIVE\n"
+              "     Otherwise the new entries will show as missing and will not analyse.")
 
     if not a.write:
         print("\n  Nothing was written. Add --write to add these to your library.")
@@ -2521,7 +2827,15 @@ def cmd_intake(a):
                 # Analysed is left unset on purpose. That is the flag Rekordbox
                 # looks for on startup, and an unset one is what gets the track
                 # onto its list. Both 0 and NULL work; do not "helpfully" fill it.
-                c = w.add_content(p, **kw)
+                sp = stored_path(p)
+                c = w.add_content(sp, **kw)
+                if sp != p:
+                    # add_content stat()s the path it is given, so a remapped
+                    # path it cannot see leaves size and name unset. Fill them
+                    # from the file we actually read.
+                    c.FileSize = sz
+                    c.FileNameL = os.path.basename(p)
+                    c.FileNameS = os.path.basename(p)[:31]
                 added.append(c)
             except Exception as e:
                 failed.append((p, str(e)[:120]))
@@ -2647,6 +2961,190 @@ def cmd_finish(a):
     db.close()
 
 
+# Rekordbox ships eight track colours and names them in djmdColor. Matching on the
+# name rather than the ID means a config file reads like English and does not break
+# if the table is ever renumbered.
+COLOR_NAMES = ('Pink', 'Red', 'Orange', 'Yellow', 'Green', 'Aqua', 'Blue', 'Purple')
+
+# What the colours mean, unless crate_doctor.ini says otherwise. Measured rather
+# than chosen: in this library a star rating is ENERGY, not preference -- 1-star
+# tracks average 0.90 play sessions and 5-star 1.26, which is flat. So play history
+# is information the library holds nowhere else, and that is what colour is worth
+# spending on. First rule that matches wins.
+DEFAULT_COLOR_RULES = [
+    ('Green',  'plays >= 4'),                      # workhorse, never fails
+    ('Aqua',   'plays >= 2'),                      # proven
+    ('Blue',   'plays >= 1'),                      # played once
+    ('Purple', 'plays == 0 and rating >= 4'),      # thought it was good, never pulled the trigger
+]
+
+_RULE_FIELDS = ('plays', 'rating', 'bpm', 'year', 'length', 'cues', 'stars')
+
+
+def rule_ok(expr):
+    """Compile a colour rule, refusing anything that is not a plain comparison.
+
+    Rules come from a config file, and a config file is not a place to accept
+    arbitrary Python. Only names from _RULE_FIELDS, numbers, comparisons and
+    and/or/not get through -- no calls, no attributes, no subscripts, so there is
+    no route from a rule to the filesystem.
+    """
+    import ast as _ast
+    try:
+        tree = _ast.parse(expr, mode='eval')
+    except SyntaxError as e:
+        return f"not a valid expression: {e.msg}"
+    allowed = (_ast.Expression, _ast.BoolOp, _ast.UnaryOp, _ast.Compare, _ast.Name,
+               _ast.Constant, _ast.And, _ast.Or, _ast.Not, _ast.Load,
+               _ast.Eq, _ast.NotEq, _ast.Lt, _ast.LtE, _ast.Gt, _ast.GtE)
+    for node in _ast.walk(tree):
+        if not isinstance(node, allowed):
+            return f"{type(node).__name__} is not allowed in a colour rule"
+        if isinstance(node, _ast.Name) and node.id not in _RULE_FIELDS:
+            return f"unknown field {node.id!r} (use: {', '.join(_RULE_FIELDS)})"
+    return None
+
+
+def play_counts(db):
+    """How many logged sessions each track appears in.
+
+    Rekordbox writes a history playlist per session, so the count of sessions a
+    track appears in is a truer 'how often do I actually play this' than the
+    DJPlayCount column, which also ticks up from previewing in the browser.
+    """
+    counts = collections.Counter()
+    _hist = list(db.get_history())
+    prog = Progress(len(_hist), 'reading play history', 'sessions', min_total=50)
+    for h in _hist:
+        prog.step()
+        if h.rb_local_deleted:
+            continue
+        try:
+            for sh in db.get_history_songs(HistoryID=h.ID):
+                counts[sh.ContentID] += 1
+        except Exception:
+            continue
+    prog.done()
+    return counts
+
+
+def cmd_color(a):
+    """Colour-code tracks from a rule set you control.
+
+    Rekordbox gives every track one of eight colours, and it is the only attribute
+    visible at a glance while scrolling in a dark booth. That makes it worth
+    spending on something the library does not already say: not energy (the star
+    rating), not style (My Tags), not set position (the playlist tiers), but how
+    road-tested a track is -- which nothing else records.
+
+    Whatever you want it to mean instead goes in crate_doctor.ini under [colors].
+    """
+    path = db_paths(a.db)
+    db = open_ro(path)
+
+    rules = list(DEFAULT_COLOR_RULES)
+    cfg, cfgpath = read_config(a.config)
+    if cfg.get('colors'):
+        rules = [(k.strip().title(), v.strip()) for k, v in cfg['colors'].items() if v.strip()]
+        print(f"using the {len(rules)} colour rules from {cfgpath}")
+    bad = False
+    for name, expr in rules:
+        if name not in COLOR_NAMES:
+            print(f"  !! {name!r} is not a Rekordbox colour. Pick from: {', '.join(COLOR_NAMES)}")
+            bad = True
+        err = rule_ok(expr)
+        if err:
+            print(f"  !! rule for {name}: {err}")
+            bad = True
+    if bad:
+        sys.exit("fix the rules above and run again. Nothing was read.")
+
+    ids = {}
+    for c in db.get_color():
+        if (c.Commnt or '') in COLOR_NAMES:
+            ids[c.Commnt] = c.ID
+    missing = [n for n, _e in rules if n not in ids]
+    if missing:
+        sys.exit(f"this database has no colour named {', '.join(missing)}.")
+
+    plays = play_counts(db)
+    cues = memory_cues(db)
+    compiled = [(n, e, compile(e, '<rule>', 'eval')) for n, e in rules]
+
+    plan, byname, unmatched = {}, collections.Counter(), 0
+    current = collections.Counter()
+    for r in real_tracks(db):
+        env = {'plays': plays.get(r.ID, 0),
+               'rating': (r.Rating or 0), 'stars': (r.Rating or 0),
+               'bpm': (r.BPM or 0) / 100.0,
+               'year': int(r.ReleaseYear or 0),
+               'length': (r.Length or 0),
+               'cues': len(cues.get(str(r.ID), []))}
+        current[r.ColorID or 0] += 1
+        hit = None
+        for name, expr, code in compiled:
+            try:
+                if eval(code, {'__builtins__': {}}, env):
+                    hit = name
+                    break
+            except Exception:
+                continue
+        if hit is None:
+            unmatched += 1
+            continue
+        byname[hit] += 1
+        if (r.ColorID or 0) != ids[hit]:
+            plan[r.ID] = (ids[hit], hit, r)
+
+    total = sum(byname.values()) + unmatched
+    print(f"\n{total} tracks, {len([1 for k, v in current.items() if k])} currently coloured")
+    print("\nrules, in order — first match wins:")
+    for name, expr in rules:
+        n = byname[name]
+        print(f"   {name:<8} {expr:<34} {n:5d}  {100*n/max(1,total):4.1f}%  {'#'*int(40*n/max(1,total))}")
+    print(f"   {'(none)':<8} {'no rule matched':<34} {unmatched:5d}  {100*unmatched/max(1,total):4.1f}%")
+    print(f"\ntracks whose colour would change: {len(plan)}")
+    for cid, (colid, name, r) in list(plan.items())[:a.limit]:
+        print(f"   {name:<7} {(r.Title or '?')[:40]:42s} {plays.get(cid,0)} plays, {r.Rating or 0}*")
+    if len(plan) > a.limit:
+        print(f"   ... and {len(plan)-a.limit} more")
+    db.close()
+
+    if not plan:
+        print("\n  nothing to change.")
+        return
+    if not a.write:
+        print("\n  Nothing was written. Add --write to apply.\n"
+              "  Colour is cosmetic and reversible -- `color --clear --write` removes it all.")
+        return
+
+    with SafeWrite(path) as w:
+        n = 0
+        for r in w.get_content():
+            if r.ID in plan:
+                r.ColorID = plan[r.ID][0]
+                n += 1
+    print(f"\n  coloured {n} tracks")
+
+
+def cmd_color_clear(a):
+    path = db_paths(a.db)
+    db = open_ro(path)
+    n = len([r for r in real_tracks(db) if r.ColorID])
+    db.close()
+    print(f"{n} tracks currently carry a colour")
+    if not n:
+        return
+    if not a.write:
+        print("  dry run. --write to clear them.")
+        return
+    with SafeWrite(path) as w:
+        for r in w.get_content():
+            if r.ColorID:
+                r.ColorID = 0
+    print(f"  cleared {n}")
+
+
 def cmd_backup(a):
     path = db_paths(a.db)
     dst, n = backup(path, 'manual')
@@ -2674,8 +3172,16 @@ def main():
     c.add_argument('--limit', type=int, default=25)
     c.add_argument('--fix', action='store_true', help='repair the cues, not just report on them')
     c.add_argument('--all', action='store_true', help='with --fix: every cue, including ones you set by hand')
+    c.add_argument('--rebuild', action='store_true',
+                   help='with --fix: delete the cues in scope and place them again from scratch, '
+                        'instead of only topping up. Use after changing the placement rules.')
     c.add_argument('--target', type=int, default=0, help='with --fix: top each track back up to this many cues')
     c.add_argument('--min-space', type=int, default=8, help='minimum bars between cues (default 8)')
+    c.add_argument('--anchor-bars', default='0,32',
+                   help='bars that should almost always carry a cue (default 0,32 -- measured at '
+                        '94%% and 81%% of this library). Empty string turns anchors off.')
+    c.add_argument('--snap', type=int, default=2,
+                   help='pull a cue within N bars of the 8-grid onto it (default 2, 0 = off)')
     c.add_argument('--outro-lo', type=int, default=20, help='window for the final cue, nearest bar to the end (default 20)')
     c.add_argument('--outro-hi', type=int, default=36, help='window for the final cue, furthest bar (default 36)')
     c.add_argument('--write', action='store_true', help='with --fix: actually apply the changes')
@@ -2732,6 +3238,8 @@ def main():
     c.set_defaults(func=cmd_dupes)
 
     c = sub.add_parser('rename', help="rename files on disk to match your library metadata")
+    c.add_argument('--music-root', action='append', default=[],
+                   help='folder holding your audio (repeatable). Inferred from the library if omitted.')
     c.add_argument('--pattern', default='{artist} - {title}',
                    help='fields: {artist} {title} {remixer} {mix}  (default: "{artist} - {title}")')
     c.add_argument('--limit', type=int, default=15, help='examples to print')
@@ -2745,6 +3253,8 @@ def main():
     c.add_argument('--no-playlist', action='store_true', help='do not record the batch as a playlist')
     c.add_argument('--force', action='store_true', help='add even files that duplicate a local track you already have')
     c.add_argument('--open', action='store_true', help='launch Rekordbox afterwards, ready for the analysis click')
+    c.add_argument('--path-as', help='store paths as Rekordbox sees them: SEARCHED=STORED, '
+                                     'e.g. /mnt/T7=/Volumes/T7 (only if you reached the drive through a mount)')
     c.add_argument('--limit', type=int, default=20, help='how many to list in the report (default 20)')
     c.set_defaults(func=cmd_intake)
 
@@ -2753,6 +3263,12 @@ def main():
     c.add_argument('--all', action='store_true', help='every intake batch, not just the newest')
     c.add_argument('--limit', type=int, default=15)
     c.set_defaults(func=cmd_finish)
+
+    c = sub.add_parser('color', help="colour-code tracks by how road-tested they are (or your own rules)")
+    c.add_argument('--write', action='store_true', help='actually apply the colours')
+    c.add_argument('--clear', action='store_true', help='remove every track colour instead')
+    c.add_argument('--limit', type=int, default=15)
+    c.set_defaults(func=lambda x: cmd_color_clear(x) if x.clear else cmd_color(x))
 
     c = sub.add_parser('backup', help="timestamped copy of master.db")
     c.set_defaults(func=cmd_backup)

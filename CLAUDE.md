@@ -232,12 +232,26 @@ checks every track is `Analysed == 105` **and** has an `AnalysisDataPath` (a tra
 part-way through has files but no row yet, and calling that done hands `sound` a track
 with no waveform). Read-only; prints the commands to run next.
 
-**Streaming/cloud entries** are stubs with a fake absolute path
-(`/contents_4056005572/artist/album`) and **no database column distinguishes them** —
-same `FileType`, `FileSize`, `AnalysisDataPath`. `path_bucket()` tells them apart by
-path shape against `LOCAL_ROOTS`. They cannot hold cues or go to a USB, so a local
-file matching one is **added**, not skipped. On the reference library this is 2,756 of
-3,214 entries; treating them as real files yields a nonsense music root.
+**Cloud Library Sync entries** store a path that is not a filesystem path
+(`/contents_4056005572/artist/album/title`) while **the actual file sits in the user's
+music folder**. No database column distinguishes them — same `FileType`, `FileSize`,
+`AnalysisDataPath` — so `path_bucket()` tells them apart by path shape against
+`LOCAL_ROOTS`. On the reference library 2,756 of 3,214 entries are like this, and
+**2,116 of those (77%) resolve to a real file on disk** by `FileNameL` + exact
+`FileSize`.
+
+**They are NOT stubs, and this was got wrong once.** An earlier version of `intake`
+assumed a cloud path meant no file existed and added the local copy as a new entry —
+which on this library would have created 2,116 duplicate rows, splitting cues and play
+history across two entries per track. The rule is: **same filename + same exact byte
+size is a duplicate, whatever the stored path looks like.** `--force` overrides and
+prints a warning naming the count.
+
+`os.path.exists(FolderPath)` is therefore never a test for "does this track have a
+file". Resolve through the music-root index instead. `disk` already matched by name so
+it was unaffected; `rename` reported 2,756 real tracks as missing until it was fixed.
+`rename` still refuses to touch them, deliberately: it rewrites `FolderPath`, and
+repointing a synced entry at a local path would break the user's cloud sync.
 
 **`infer_music_roots(db)`** — reads the music root off stored paths so `disk` and
 `relocate` need no `--music-root`. Groups by drive via `path_bucket` *first* (else a

@@ -8,10 +8,11 @@ Read-only unless you type `--write`.
 
 **https://github.com/mchernauskas/crate_doctor**
 
-> **Status: alpha.** Tested end to end against a real 3,214-track library, but the code has
-> only ever *executed* on Linux — the test library lived on a Mac and was reached over a
-> mount. The macOS and Windows code paths are written and path-verified but unrun. Back up
-> before you use `--write`, and expect names and flags to move. See CHANGELOG.md.
+> **Status: alpha.** Verified end to end on **macOS** (15.6, Apple Silicon, Python 3.12)
+> against a real 3,214-track Rekordbox 7 library: 17 of 17 checks passed, covering every
+> command, all four write paths, and a SHA-256 proof that the real library was untouched.
+> Also exercised on Linux. **Windows is written and path-verified but has never been run.**
+> Back up before you use `--write`, and expect names and flags to move. See CHANGELOG.md.
 
 *Unofficial. Not affiliated with, endorsed by, or supported by Pioneer DJ / AlphaTheta.
 "Rekordbox" is their trademark, used here only to say what this tool reads.*

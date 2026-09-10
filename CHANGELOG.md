@@ -38,6 +38,31 @@ Writing the analysis files directly was ruled out: `pyrekordbox` round-trips `.D
 and `.EXT` byte-identically but cannot rebuild `.2EX`, and Rekordbox 7 also writes a
 fourth format, `.3EX`. Analysis stays Rekordbox's job.
 
+### Cloud Library Sync: a correction, and the bug it caused
+
+Rekordbox stores cloud-synced tracks under a path that is not a filesystem path
+(`/contents_<id>/artist/album/...`) while the file itself sits in the user's music
+folder. This was originally read as "a streaming stub with no file behind it", and
+`intake` was built on that assumption: an incoming file matching such an entry was
+**added** rather than skipped.
+
+That was wrong. On the reference library, 2,116 of 2,756 cloud entries (77%) resolve
+to a real file on disk by filename + exact byte size. Running `intake` over that
+library's own music folder would have created 2,116 duplicate entries, each splitting
+the track's cues and play history in half.
+
+- **`intake`** now treats filename + exact size as a duplicate regardless of the
+  stored path. `--force` still adds them, and now prints a warning saying what it is
+  about to do and to how many.
+- **`rename`** indexed nothing and used `os.path.exists(FolderPath)`, so it reported
+  every cloud entry as "file not found on disk" — 2,756 of 3,214 tracks. It now
+  resolves them through the music-root index and separates three distinct cases:
+  cloud-synced (file present), moved (run `relocate`), and genuinely missing. It
+  deliberately refuses to rename cloud-synced entries: renaming rewrites
+  `FolderPath`, and repointing a synced entry at a local path breaks the sync.
+- **`disk`** was unaffected — it already matched by filename anywhere under the
+  scanned roots rather than trusting the stored path.
+
 ### Also
 
 - **Music root is inferred from the library.** `disk` and `relocate` no longer need
@@ -56,11 +81,25 @@ fourth format, `.3EX`. Analysis stays Rekordbox's job.
   first megabyte, so the same download saved twice under two names does not become
   two entries with your cues on only one of them.
 
-### Still not run on macOS
+### Now verified on macOS
 
-Everything above was exercised on Linux against a real Mac library over a mount,
-including the full write path with integrity checks. `launch_rekordbox()`'s
-`open -a rekordbox` branch has never executed. Unchanged from a1: this is the gap.
+Run on macOS 15.6 (Darwin 25.6.0, arm64), Python 3.12, against a real 3,214-track
+Rekordbox 7 library: **17 of 17 checks passed.**
+
+- `setup` installed both dependencies from cold. Homebrew's Python refused with PEP 668
+  `externally-managed-environment`; the `--break-system-packages` fallback carried it.
+  `sqlcipher3-wheels` arrived as a prebuilt arm64 wheel, so no compiler and no
+  `brew install sqlcipher` was needed.
+- Database auto-detect found `~/Library/Pioneer/rekordbox/master.db` with no flag.
+- The Rekordbox process guard (`pgrep -x`) ran correctly on darwin.
+- All ten read-only commands ran against the real library.
+- All four write paths ran against a throwaway copy; `PRAGMA integrity_check` returned
+  ok and `foreign_key_check` found 0 problems afterwards.
+- The real library was SHA-256 identical before and after the entire run.
+
+**Still unverified:** `launch_rekordbox()`'s `open -a rekordbox` branch; the write
+guard's refusal while Rekordbox is actually running; the cloud-sync fix to `rename`,
+which postdates that test run. Windows remains entirely untested.
 
 ## 0.9.0a1 — alpha
 
