@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.9.0a6 — alpha
+
+### `hotcues`: clear hot cues from the part of the library you haven't vetted yet
+
+Eleven commands. `hotcues` reports on hot cues (`djmdCue.Kind != 0`) and, with
+`--clear`, soft-deletes them from a slice of the library. Memory cues are never
+touched.
+
+Why it exists: the review loop. The DJ works down the Date Added list a batch at a
+time, checking the cues the tool placed. Rekordbox's own memory→hot conversion
+refuses to write onto a full bank ("There are no Hot Cues left that can be set"),
+so the tracks not yet reviewed need their hot cues cleared before the fixed memory
+cues can be converted.
+
+Scope narrows three ways, all optional:
+
+- `--local` — only tracks whose file is a real path on this machine, not Cloud
+  Library Sync entries
+- `--skip-newest N` — leave the N most recently added tracks alone. The dry run
+  prints the last kept and first cleared track so the boundary can be checked
+  against the Date Added column before anything is written.
+- `--since YYYY-MM-DD` — only hot cues created on or after that date. Without it,
+  the dry run lists every track whose hot cues predate the bulk batch, because those
+  are almost certainly hand work.
+
+First real run: 458 local tracks, 21 vetted, 4,303 hot cues removed from 431
+tracks, 57 hand-set hot cues on 6 tracks protected by `--since`.
+
+**Hot cue numbering.** `Kind` 1, 2, 3, 5, 6, 7, 8, 9 are A–H — 4 is skipped — and
+10, 11, … carry on as I, J, … for the extended banks. `hotcue_letter()` does the
+mapping.
+
+**Date Added order.** `DateCreated` is a date; two hundred tracks imported in one
+go all share it. `created_at` carries microseconds and reproduces Rekordbox's
+Date Added column exactly, including within a batch. `by_date_added()` sorts on it.
+
 ## 0.9.0a5 — alpha
 
 ### Cue IDs must be numeric, or Rekordbox hangs when you click them

@@ -926,6 +926,168 @@ def fix_cues(a):
     print(f"  removed {ndel}, added {nadd}")
 
 
+# ---------------------------------------------------------------- hot cues
+
+def hotcue_letter(kind):
+    """Rekordbox numbers hot cues 1,2,3,5,6,7,8,9 for A-H -- 4 is skipped -- and
+    carries on from 10 for the extended banks (I, J, ...)."""
+    if kind <= 0:
+        return 'mem'
+    n = kind - 1 if kind < 4 else kind - 2
+    return chr(ord('A') + n) if n < 26 else f'#{kind}'
+
+
+def by_date_added(rows):
+    """Newest first, the way the Date Added column sorts in Rekordbox. created_at
+    carries microseconds, so tracks added in one batch still have a fixed order."""
+    return sorted(rows, key=lambda r: (r.created_at or datetime.datetime.min, int(r.ID)), reverse=True)
+
+
+def cmd_hotcues(a):
+    """Report on hot cues; with --clear, remove them from a slice of the library.
+
+    Built for a review loop. The DJ works down the Date Added list vetting tracks a
+    batch at a time. Everything they have not reached yet gets its hot cues cleared,
+    so that after the memory cues are fixed the next memory->hot conversion has
+    empty slots to land in (Rekordbox refuses to convert onto a full bank).
+
+    Scope is three things, all optional, all narrowing:
+      --local            only tracks whose file is a real path on this machine, not
+                         Cloud Library Sync entries
+      --skip-newest N    leave the N most recently added tracks in scope alone --
+                         the ones already vetted
+      --since DATE       only hot cues created on or after DATE. This is how hand-set
+                         hot cues from years ago survive a bulk clear.
+    Memory cues are never touched by this command.
+    """
+    path = db_paths(a.db)
+    db = open_ro(path)
+    rows = list(real_tracks(db))
+    if a.local:
+        rows = [r for r in rows if path_bucket(r.FolderPath or '') is not None]
+    rows = by_date_added(rows)
+    hot = collections.defaultdict(list)
+    for c in db.query(tables.DjmdCue).all():
+        if c.rb_local_deleted or c.Kind == 0:
+            continue
+        hot[str(c.ContentID)].append(c)
+    since = None
+    if a.since:
+        try:
+            since = datetime.datetime.strptime(a.since, '%Y-%m-%d')
+        except ValueError:
+            sys.exit(f"--since wants YYYY-MM-DD, got {a.since!r}")
+
+    scope = 'local tracks' if a.local else 'all tracks'
+    with_hot = [r for r in rows if hot.get(str(r.ID))]
+    print(f"\n{len(rows)} {scope}, {len(with_hot)} of them carry hot cues "
+          f"({sum(len(hot[str(r.ID)]) for r in with_hot)} hot cues in total).")
+    # when were they made? bulk conversions show up as one big day
+    days = collections.Counter(str(c.created_at)[:10] if c.created_at else '?'
+                               for r in with_hot for c in hot[str(r.ID)])
+    print("  hot cues by the day they were created (a bulk conversion is one big day):")
+    for d, n in sorted(days.items(), key=lambda x: -x[1])[:8]:
+        print(f"     {d}  {n:6d}")
+    if len(days) > 8:
+        print(f"     ... and {len(days) - 8} more days")
+
+    if a.skip_newest:
+        if a.skip_newest >= len(rows):
+            sys.exit(f"--skip-newest {a.skip_newest} skips everything ({len(rows)} tracks in scope)")
+        keep, rows = rows[:a.skip_newest], rows[a.skip_newest:]
+        print(f"\n  Leaving the {len(keep)} most recently added alone. Check these two lines against\n"
+              f"  your Date Added view -- the boundary is the whole point:")
+        r = keep[-1]
+        print(f"     last kept    #{len(keep):<4d} {track_label(db, r)}")
+        r = rows[0]
+        print(f"     first cleared #{len(keep) + 1:<4d} {track_label(db, r)}")
+
+    if not a.clear:
+        print("\n  Nothing to do. Add --clear to plan a removal (dry run until --write).")
+        return
+
+    plan = {}
+    protected = collections.Counter()
+    old_tracks = []
+    for r in rows:
+        cs = hot.get(str(r.ID))
+        if not cs:
+            continue
+        if since:
+            ours = [c for c in cs if c.created_at and c.created_at >= since]
+            skipped = len(cs) - len(ours)
+            if skipped:
+                protected[str(r.ID)] = skipped
+        else:
+            ours = cs
+            oldest = min((c.created_at for c in cs if c.created_at), default=None)
+            # the newest bulk day is the conversion; anything older is likely hand work
+            bulk = max(days, key=days.get) if days else None
+            if oldest and bulk and str(oldest)[:10] < bulk:
+                old_tracks.append((r, oldest, len(cs)))
+        if ours:
+            plan[str(r.ID)] = ours
+    n = sum(len(v) for v in plan.values())
+    print(f"\n  hot cues to remove : {n} across {len(plan)} tracks")
+    if since:
+        print(f"  protected          : {sum(protected.values())} hot cues on {len(protected)} tracks, "
+              f"created before {a.since}")
+    elif old_tracks:
+        print(f"\n  !  {len(old_tracks)} of these tracks carry hot cues OLDER than the bulk batch -- "
+              f"almost certainly set by hand:")
+        for r, oldest, k in old_tracks[:12]:
+            print(f"       {str(oldest)[:10]}  {k:2d} hot cues  {track_label(db, r)}")
+        if len(old_tracks) > 12:
+            print(f"       ... and {len(old_tracks) - 12} more")
+        print(f"     Pass --since YYYY-MM-DD to leave anything created before that date alone.")
+    mem_n = sum(1 for c in db.query(tables.DjmdCue).all()
+                if not c.rb_local_deleted and c.Kind == 0 and str(c.ContentID) in plan)
+    print(f"  memory cues on those tracks: {mem_n} -- untouched")
+    if a.limit:
+        print(f"\n  first {min(a.limit, len(plan))} tracks in Date Added order:")
+        shown = 0
+        for r in rows:
+            if str(r.ID) not in plan:
+                continue
+            letters = ''.join(sorted(hotcue_letter(c.Kind) for c in plan[str(r.ID)]))
+            print(f"     -{len(plan[str(r.ID)]):2d} [{letters:10}] {track_label(db, r)}")
+            shown += 1
+            if shown >= a.limit:
+                break
+    if not a.write:
+        print("\n  dry run -- nothing written. add --write to apply.")
+        return
+    if not plan:
+        return
+    dst, k = backup(path, 'before_hotcues')
+    print(f"\n  backup: {dst}" + (f" (+{k-1} wal/shm)" if k > 1 else ""))
+    now = datetime.datetime.now()
+    want = {(cid, str(c.ID)) for cid, cs in plan.items() for c in cs}
+    done = 0
+    with SafeWrite(path) as live:
+        for c in live.query(tables.DjmdCue).all():
+            if c.Kind == 0 or c.rb_local_deleted:
+                continue
+            if (str(c.ContentID), str(c.ID)) in want:
+                c.rb_local_deleted = 1
+                c.rb_local_synced = 0
+                c.updated_at = now
+                done += 1
+    print(f"  removed {done} hot cues")
+    if done != n:
+        print(f"  !  planned {n} but removed {done} -- the library changed between the dry run "
+              f"and the write. Re-run the dry run and look.")
+
+
+def track_label(db, r):
+    art = ''
+    try:
+        art = (r.Artist.Name if r.Artist is not None else '') or ''
+    except Exception:
+        pass
+    return f"{art[:26]:26} | {(r.Title or '?')[:48]}"
+
+
 # ---------------------------------------------------------------- features
 
 def cmd_sound(a):
@@ -3211,6 +3373,18 @@ def main():
     c.add_argument('--outro-hi', type=int, default=36, help='window for the final cue, furthest bar (default 36)')
     c.add_argument('--write', action='store_true', help='with --fix: actually apply the changes')
     c.set_defaults(func=cmd_cues)
+
+    c = sub.add_parser('hotcues', help="report on hot cues; --clear removes them from a slice of the library")
+    c.add_argument('--clear', action='store_true', help='plan the removal (dry run until --write)')
+    c.add_argument('--local', action='store_true',
+                   help='only tracks whose file is a real path here, not Cloud Library Sync entries')
+    c.add_argument('--skip-newest', type=int, default=0, metavar='N',
+                   help='leave the N most recently added tracks in scope alone (the ones already vetted)')
+    c.add_argument('--since', default='', metavar='YYYY-MM-DD',
+                   help='only remove hot cues created on or after this date; protects older hand-set ones')
+    c.add_argument('--limit', type=int, default=25, help='how many tracks to list in the dry run (default 25)')
+    c.add_argument('--write', action='store_true', help='with --clear: actually apply the changes')
+    c.set_defaults(func=cmd_hotcues)
 
     c = sub.add_parser('sound', help="per-track sound numbers, decoded from the stored waveform")
     c.add_argument('-o', '--out', help='write JSONL here instead of stdout')

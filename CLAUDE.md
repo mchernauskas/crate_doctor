@@ -310,12 +310,53 @@ drive, point `backups` there — suggest it once, early, rather than after their
 **`init [path]`** — writes `crate_doctor.ini`. `--force` overwrites.
 
 **`cues`** *(can write)* — measures their habit; `--fix` repairs.
-`--fix` `--tag NAME` `--all` `--floor-bars N` `--target N` `--min-space N`
-`--outro-lo N` `--outro-hi N` `--limit N` `--write`
+`--fix` `--tag NAME` `--all` `--rebuild` `--floor-bars N` `--target N` `--min-space N`
+`--anchor-bars 0,32` `--snap N` `--outro-lo N` `--outro-hi N` `--limit N` `--write`
 
 `--fix` refuses to run without `--tag` or `--all`. That guard is deliberate — leave it
 alone. If `--outro-lo` lands inside the floor the tool moves the window and says so,
 otherwise the delete pass and the top-up pass fight each other forever.
+
+`--rebuild` throws away every cue in scope and places them again — use it after
+changing the placement rules, because topping up cannot move a cue that is already
+there. `--anchor-bars` (default `0,32`) are bars that get a cue unless the music is
+dead there; `--snap` (default 2) pulls a candidate within N bars onto the 8-grid.
+All three weights in the placement model are measured from this library, not chosen
+— the comment block in `fix_cues` has the numbers.
+
+**`hotcues`** *(can write)* — report on hot cues; `--clear` removes them from a slice.
+`--clear` `--local` `--skip-newest N` `--since YYYY-MM-DD` `--limit N` `--write`
+
+Hot cues are `djmdCue.Kind != 0`: `1,2,3,5,6,7,8,9` are A–H (4 is skipped), `10+` are
+the extended banks. Memory cues are never touched by this command. `--skip-newest N`
+walks the Date Added column newest-first and leaves the top N alone; **the dry run
+prints the last kept and first cleared track — read those two lines back to the user
+before writing**, because the whole operation hangs on that boundary. `--since`
+protects hot cues older than the date; without it the dry run lists the tracks whose
+hot cues predate the bulk batch, since those are almost certainly hand-set.
+
+### The review loop (how the cue model gets better)
+
+This is the workflow the DJ chose, and it is worth keeping to.
+
+1. Sort the non-synced tracks by **Date Added, newest first**. The DJ reviews the
+   cues in batches of 10 from the top, fixing them by hand in Rekordbox.
+2. Tracks not yet reviewed have their hot cues cleared (`hotcues --clear --local
+   --skip-newest N --since <bulk date>`), so the memory cues are what gets reviewed
+   and a later memory→hot conversion has room to land.
+3. After each batch, **diff what the DJ did against what the tool placed.** Every
+   cue the tool wrote carries `Comment = 'CUE(Claude)'`. Anything the DJ added has no
+   comment. Anything they deleted is only soft-deleted (`rb_local_deleted = 1`), so it
+   is still visible. Anything they moved has a fresh `updated_at`. That is the whole
+   learning signal: kept / moved / added / killed, per bar position.
+4. Adjust the placement weights, then `cues --fix --rebuild --tag 'CUE(Claude)'`
+   **only on the unreviewed tracks.** Never rebuild a track the DJ has vetted.
+5. Bump N by 10 and go again.
+
+State of the loop on 2026-09-18: 458 local tracks, the top 21 vetted (deadmau5 – What
+A Save down to Wilba – Rejigging the Jig), hot cues cleared below that with
+`--since 2026-09-12`, 6 tracks with older hand-set hot cues protected. Next batch is
+#22 Polly's Acid Kiss through #31 Vitess – Hewy Go.
 
 **`sound`** — waveform → per-track numbers. `-o FILE` `--limit N`
 
