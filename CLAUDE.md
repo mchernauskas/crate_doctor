@@ -356,22 +356,45 @@ This is the workflow the DJ chose, and it is worth keeping to.
    --local --newest 10` to cue the next batch. Never rebuild a track the DJ has vetted.
 5. They review, sync, and it goes again.
 
-**Cloud Library Sync destroys the tag.** Syncing a track rewrites every one of its
-cue rows: new `ID`, and `Comment` comes back `NULL`. On the first batch, 18 cues
-reappeared at byte-identical positions with no comment, which reads exactly like the
-DJ deleted and re-placed them. It is not. Two consequences: `--tag` cannot find the
-tool's own cues on a synced track, and any diff must compare positions, not tags.
-Scope work with `--local`; once a track is synced it is done.
+**A hand-set cue on the same downbeat is a new, untagged row — and it is the DJ's.**
+On the first batch the DJ re-cued two tracks from scratch, and fourteen cues came
+back on the same bar as before, 1–2 ms off (Rekordbox's quantise vs the tool's
+rounding of the grid time). The first reading called that a sync artefact. It was
+not: the rows were created one every ten seconds during the review, twenty minutes
+before the sync, and untouched cues kept their ID and tag straight through the sync.
+**Sync does not touch cue rows.** Diff by position against the backup anyway,
+because a re-set on the same bar is a confirmation, and a tag-only diff would
+miscount it as a replacement. When a number surprises you, check the timestamps
+before you build a story on it — and when the DJ says the story is wrong, they are
+probably right.
 
-**What the first batch taught us** (2026-09-19, 10 tracks, 100 cues, 71 kept):
-the outro window was the real defect — every one of their vetted last cues sits
-28–40 bars from the end, and the tool's window allowed 20. Changed to 28–40, which
-reproduces nine of their ten last-cue positions. Phrase weight 1.6 → 2.2, worth
-much less and not yet confirmed on a second batch. Full numbers in CHANGELOG 0.9.0a7.
+**What the batches taught us:**
 
-State of the loop on 2026-09-19: 427 local tracks left. The top 31 have been vetted
-and synced (deadmau5 – What A Save down to Vitess – Hewy Go). The current batch is
-Vitess – Celebrity down to Tyler Mesa – Heart in Hand, rebuilt with the 28–40 window.
+Batch 1 (10 tracks, 85 positions confirmed, 15 moved): the outro window was the real
+defect — every vetted last cue sits 28–40 bars from the end, the tool's window
+allowed 20. Changed to 28–40, reproduces nine of ten last-cue positions. Phrase
+weight 1.6 → 2.2. Full numbers in CHANGELOG 0.9.0a7.
+
+Batch 2 (10 tracks): confirmed the outro fix held (his last cues 28–41 from end) and
+surfaced the phrase-grid offset. 84% of his cues across both batches sit exactly on a
+PSSI boundary. On tracks whose phrase grid is shifted off the 8-grid by a constant
+(Heart in Hand +2, Talk Box +4), he cues the phrase, not the bar; snap now detects a
+regular shifted grid per track and snaps to phrases there, 8-grid otherwise. Modest:
+70% → 72% exact. CHANGELOG 0.9.0a8.
+
+**The method that worked, for next time:** don't hand-read the diff. Pull the DJ's
+final positions and the tool's written positions from the backup, bin both to bars,
+and grid-search the parameters against his positions (`~/work/rb_fit.py`,
+`rb_snaptest.py` on the mac are the scratch scripts). Test any proposed change on
+ALL vetted tracks before believing it — the naive phrase-snap looked obviously right
+and regressed the majority. A change that helps three tracks and hurts three is not a
+change.
+
+State of the loop on 2026-09-19: 407 local tracks left. The top 40 are vetted and
+synced (deadmau5 – What A Save down to Vitess – Celebrity's batch, i.e. through the
+second batch ending at Tyler Mesa – Heart in Hand original). Batch 3 is Tyler Mesa –
+Heart in Hand (LUNR Remix) down to Tal Fussman – Life Itself, rebuilt with the
+28–40 window and the phrase-grid detector.
 
 **`sound`** — waveform → per-track numbers. `-o FILE` `--limit N`
 

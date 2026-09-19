@@ -1,11 +1,46 @@
 # Changelog
 
+## 0.9.0a8 — alpha
+
+### The 8-grid is not always the grid: snap to the phrase boundaries instead
+
+Second review batch, and the first one re-examined by position rather than by tag
+(the tag reasoning in a7 was wrong — see the correction there). Two batches now,
+22 tracks, 219 vetted cues. 84% of the DJ's cues sit exactly on a Rekordbox PSSI
+phrase boundary, 90% within two bars. That held across both batches.
+
+What batch two added: on a handful of tracks the phrase grid is **shifted off the
+8-grid by a constant**. Heart in Hand's phrases are a clean 16-grid at +2 bars;
+Talk Box's and one *That Boy* remix at +4 and +5. On those the DJ cues the phrase
+every time, and the old snap-to-8-grid was pulling every cue one to four bars off
+the phrase it belonged on — the single biggest source of disagreement in the batch.
+
+The fix decides the grid per track. When a track's phrase boundaries share a
+dominant nonzero offset mod 8 (`≥60%` at the same offset, a regular shifted grid),
+snap candidates to the phrase boundaries; otherwise snap to the 8-grid as before.
+The guard matters: a naive "always snap to phrase" *regressed* the majority of
+tracks from 70% to 65%, because most tracks are phrased on the 8-grid and forcing
+the odd energy event onto a distant phrase boundary is wrong. It also deliberately
+does not fire on tracks whose phrasing is merely irregular rather than shifted
+(Polly's Acid Kiss), where the DJ cues the 8-grid. Net across both batches: exact
+agreement 70% → 72%, within-two-bars unchanged. A small, targeted win — honestly
+worth much less than the outro-window fix in a7 — but it is the right mechanism and
+it is measured, not guessed.
+
+### What did NOT change
+
+The phrase weight stays at 2.2 and the outro window at 28–40; batch two confirmed
+both (the DJ's last cues landed 28–41 bars from the end, and 9 of 10 of the tool's
+outro placements survived his review). No change was made on the strength of a
+single track.
+
 ## 0.9.0a7 — alpha
 
 ### The final cue was landing too close to the end — measured, not guessed
 
-First batch of the review loop: ten tracks, a hundred cues. The DJ kept 71 and
-replaced 29. The single clearest pattern was the last cue on the track. They moved
+First batch of the review loop: ten tracks, a hundred cues. The DJ confirmed 85
+positions and moved 15 (see the note on hand-set rows below for why it is not "71
+kept, 29 replaced"). The single clearest pattern was the last cue on the track. They moved
 it on five of the seven tracks they touched, every time in the same direction —
 earlier — and every time onto a phrase boundary:
 
@@ -41,14 +76,22 @@ takes the N most recently added tracks and `--local` skips Cloud Library Sync
 entries, the same scoping `hotcues` uses. The run prints the tracks in scope before
 it does anything.
 
-**Cloud Library Sync rewrites cue rows and drops the `Comment`.** When a track is
-synced, every cue gets a new row ID and loses its tag, so `--tag 'CUE(Claude)'`
-cannot find the tool's own work on a synced track any more. This was found by
-diffing a batch before and after sync: 18 cues came back at byte-identical
-positions with new IDs and a `NULL` comment, which at first reading looked like
-the DJ had re-placed them by hand. It matters for the loop — **scope by
-`--local`, and a track that has been synced is finished as far as the tool is
-concerned.**
+**A cue the DJ sets by hand is a new row with no comment, even when it lands on
+the same downbeat as the one it replaces.** On two tracks the DJ cleared the
+tool's cues and re-cued from scratch. Fourteen of those landed on the same bar as
+before — 1 to 2 ms off, which is Rekordbox's own quantise against the tool's
+`int(round(...))` of the grid time — and the first reading of the diff mistook
+them for a sync artefact. They are not. The row `created_at` times run one every
+ten seconds through the review session, twenty minutes before the sync, and the
+cues the DJ left alone kept their row ID and their `CUE(Claude)` tag straight
+through the sync. **Cloud Library Sync does not touch cue rows.** The correction
+was made after the DJ pointed out that they had made edits close to the originals.
+
+What it means for the loop: a re-set on the same bar is the strongest possible
+confirmation of that position, not a change, and it only shows up if the diff
+compares positions against the backup rather than trusting the tag. Counting
+that way, batch one was 85 of 100 positions confirmed and 15 moved, not 71 kept
+and 29 replaced.
 
 ## 0.9.0a6 — alpha
 
