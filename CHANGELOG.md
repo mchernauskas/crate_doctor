@@ -1,5 +1,55 @@
 # Changelog
 
+## 0.9.0a7 — alpha
+
+### The final cue was landing too close to the end — measured, not guessed
+
+First batch of the review loop: ten tracks, a hundred cues. The DJ kept 71 and
+replaced 29. The single clearest pattern was the last cue on the track. They moved
+it on five of the seven tracks they touched, every time in the same direction —
+earlier — and every time onto a phrase boundary:
+
+| track | last cue was | they moved it to |
+|---|---|---|
+| Polly's Acid Kiss | 20 bars from end | 36 |
+| Peninsula | 17 | 57 |
+| Vibin Check | 17 | 29 |
+| Rock You | 19 | 31 |
+| Hewy Go | 22 | 34 |
+| Talk Box | 20 | 28 |
+
+Their hundred vetted cues put the last one at 28, 29, 29, 30, 31, 33, 33, 34, 36
+and 40 bars from the end. **Nothing below 28.** The outro window was 20–36, so the
+tool was free to cue inside the last 20 bars, which is past the point where there is
+enough track left to mix out of. It is now **28–40**, and on the next ten tracks that
+moves the last cue from a median of 19 bars out to 32.
+
+### Phrase boundaries are worth more than the grid
+
+86 of their 100 vetted cues sit exactly on a PSSI phrase boundary; 91 within two
+bars. The phrase weight goes 1.6 → 2.2, which raises the model's own on-phrase rate
+from 78% to 85% on that batch. Honest caveat: on the *next* ten tracks the same
+change moved on-phrase from 68% to 69%, so this one is worth a fraction of what the
+outro fix is worth, and a wider sample may revise it. The outro change reproduces
+nine of their ten last-cue positions exactly.
+
+### `cues --local --newest N`
+
+`--fix` could only run on the whole library, which is useless for a review loop —
+rebuilding a track the DJ has already vetted throws their work away. `--newest N`
+takes the N most recently added tracks and `--local` skips Cloud Library Sync
+entries, the same scoping `hotcues` uses. The run prints the tracks in scope before
+it does anything.
+
+**Cloud Library Sync rewrites cue rows and drops the `Comment`.** When a track is
+synced, every cue gets a new row ID and loses its tag, so `--tag 'CUE(Claude)'`
+cannot find the tool's own work on a synced track any more. This was found by
+diffing a batch before and after sync: 18 cues came back at byte-identical
+positions with new IDs and a `NULL` comment, which at first reading looked like
+the DJ had re-placed them by hand. It matters for the loop — **scope by
+`--local`, and a track that has been synced is finished as far as the tool is
+concerned.**
+
 ## 0.9.0a6 — alpha
 
 ### `hotcues`: clear hot cues from the part of the library you haven't vetted yet

@@ -340,23 +340,38 @@ hot cues predate the bulk batch, since those are almost certainly hand-set.
 This is the workflow the DJ chose, and it is worth keeping to.
 
 1. Sort the non-synced tracks by **Date Added, newest first**. The DJ reviews the
-   cues in batches of 10 from the top, fixing them by hand in Rekordbox.
+   cues in batches of 10 from the top, fixing them by hand in Rekordbox, then syncs
+   the batch to Cloud Library Sync, which takes it out of the non-synced pool. So
+   **the next batch is always the top 10 of what is still local** — no offset to
+   track, and `--newest 10` finds it.
 2. Tracks not yet reviewed have their hot cues cleared (`hotcues --clear --local
    --skip-newest N --since <bulk date>`), so the memory cues are what gets reviewed
    and a later memory→hot conversion has room to land.
-3. After each batch, **diff what the DJ did against what the tool placed.** Every
-   cue the tool wrote carries `Comment = 'CUE(Claude)'`. Anything the DJ added has no
-   comment. Anything they deleted is only soft-deleted (`rb_local_deleted = 1`), so it
-   is still visible. Anything they moved has a fresh `updated_at`. That is the whole
-   learning signal: kept / moved / added / killed, per bar position.
-4. Adjust the placement weights, then `cues --fix --rebuild --tag 'CUE(Claude)'`
-   **only on the unreviewed tracks.** Never rebuild a track the DJ has vetted.
-5. Bump N by 10 and go again.
+3. After each batch, **diff the library against the backup taken before the DJ
+   started.** Not against the comments — see the warning below. `master_before_*` in
+   the backup folder is the before state; pair cues by row ID, and then by position
+   in milliseconds. A pair whose delta is exactly 0 ms is not an edit; a delta that is
+   a whole number of bars is.
+4. Adjust the placement weights, then `cues --fix --rebuild --tag 'CUE(Claude)'
+   --local --newest 10` to cue the next batch. Never rebuild a track the DJ has vetted.
+5. They review, sync, and it goes again.
 
-State of the loop on 2026-09-18: 458 local tracks, the top 21 vetted (deadmau5 – What
-A Save down to Wilba – Rejigging the Jig), hot cues cleared below that with
-`--since 2026-09-12`, 6 tracks with older hand-set hot cues protected. Next batch is
-#22 Polly's Acid Kiss through #31 Vitess – Hewy Go.
+**Cloud Library Sync destroys the tag.** Syncing a track rewrites every one of its
+cue rows: new `ID`, and `Comment` comes back `NULL`. On the first batch, 18 cues
+reappeared at byte-identical positions with no comment, which reads exactly like the
+DJ deleted and re-placed them. It is not. Two consequences: `--tag` cannot find the
+tool's own cues on a synced track, and any diff must compare positions, not tags.
+Scope work with `--local`; once a track is synced it is done.
+
+**What the first batch taught us** (2026-09-19, 10 tracks, 100 cues, 71 kept):
+the outro window was the real defect — every one of their vetted last cues sits
+28–40 bars from the end, and the tool's window allowed 20. Changed to 28–40, which
+reproduces nine of their ten last-cue positions. Phrase weight 1.6 → 2.2, worth
+much less and not yet confirmed on a second batch. Full numbers in CHANGELOG 0.9.0a7.
+
+State of the loop on 2026-09-19: 427 local tracks left. The top 31 have been vetted
+and synced (deadmau5 – What A Save down to Vitess – Hewy Go). The current batch is
+Vitess – Celebrity down to Tyler Mesa – Heart in Hand, rebuilt with the 28–40 window.
 
 **`sound`** — waveform → per-track numbers. `-o FILE` `--limit N`
 

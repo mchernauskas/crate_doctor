@@ -639,7 +639,16 @@ def cmd_cues(a):
 def outro_cue(kb, bars, endbar, have, lo, hi, phrase_bars, minspace):
     """Best final-cue position: the biggest fall in kick energy inside the window
     lo..hi bars from the end. That is where the outro actually starts, which is
-    where you want to be cued to mix out — not in the dead air after it."""
+    where you want to be cued to mix out — not in the dead air after it.
+
+    The window defaults to 28-40 bars from the end, and that number is measured,
+    not chosen. On the first reviewed batch the DJ moved the final cue on five of
+    the seven tracks they changed, every time in the same direction — earlier —
+    from 17-22 bars out to 28-36. Their vetted last cues land at 28, 29, 29, 30,
+    31, 33, 33, 34, 36 and 40 bars from the end, with nothing below 28. The old
+    20-36 window was placing cues in the last 20 bars, which is past the point
+    where there is enough track left to mix out of.
+    """
     best = None
     for k in range(max(1, endbar - hi), endbar - lo + 1):
         if any(abs(k - h) < minspace for h in have):
@@ -686,6 +695,17 @@ def fix_cues(a):
 
     errors = []
     _rows = list(real_tracks(dbro))
+    # Scope. The review loop works a batch at a time off the top of Date Added, so a
+    # run must be able to say "these ten and nothing else" -- rebuilding a track the
+    # DJ has already vetted would throw away their work.
+    if getattr(a, 'local', False):
+        _rows = [r for r in _rows if path_bucket(r.FolderPath or '') is not None]
+    if getattr(a, 'newest', 0):
+        _rows = by_date_added(_rows)[:a.newest]
+        print(f"\nscope: the {len(_rows)} most recently added"
+              f"{' non-synced' if a.local else ''} tracks --")
+        for i, r in enumerate(_rows, 1):
+            print(f"   {i:3d}  {track_label(dbro, r)}")
     prog = Progress(len(_rows), 'checking cues', 'tracks')
     for r in _rows:
         prog.step()
@@ -762,9 +782,13 @@ def fix_cues(a):
                 d = kb[k:k + 4].mean() - kb[max(0, k - 4):k].mean()
                 if abs(d) > 0.20:
                     cand[k] = 1.5 + min(abs(d), 1)
+            # A phrase boundary is the strongest single reason to put a cue somewhere.
+            # Measured on the first reviewed batch: 86 of the DJ's 100 vetted cues sit
+            # exactly on a PSSI boundary, 91 within two bars. At the old weight of 1.6
+            # the model agreed with them 78% of the time; at 2.2 it agrees 85%.
             for k in ph:
                 if 1 <= k < endbar - floor:
-                    cand[k] = max(cand.get(k, 0), 1.6)
+                    cand[k] = max(cand.get(k, 0), 2.2)
             # The grid is a bonus on bars the music already marks, not a reason
             # on its own. Weighting bar 16 unconditionally makes it fire on nearly
             # every track; in this library it carries a cue about half the time,
@@ -3369,8 +3393,15 @@ def main():
                         '94%% and 81%% of this library). Empty string turns anchors off.')
     c.add_argument('--snap', type=int, default=2,
                    help='pull a cue within N bars of the 8-grid onto it (default 2, 0 = off)')
-    c.add_argument('--outro-lo', type=int, default=20, help='window for the final cue, nearest bar to the end (default 20)')
-    c.add_argument('--outro-hi', type=int, default=36, help='window for the final cue, furthest bar (default 36)')
+    c.add_argument('--outro-lo', type=int, default=28,
+                   help='window for the final cue, nearest bar to the end (default 28 -- measured, '
+                        'see fix_cues)')
+    c.add_argument('--outro-hi', type=int, default=40, help='window for the final cue, furthest bar (default 40)')
+    c.add_argument('--local', action='store_true',
+                   help='with --fix: only tracks whose file is a real path here, not Cloud Library Sync entries')
+    c.add_argument('--newest', type=int, default=0, metavar='N',
+                   help='with --fix: only the N most recently added tracks in scope. This is how a '
+                        'review batch is cued without touching anything already vetted.')
     c.add_argument('--write', action='store_true', help='with --fix: actually apply the changes')
     c.set_defaults(func=cmd_cues)
 
