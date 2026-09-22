@@ -375,26 +375,30 @@ defect — every vetted last cue sits 28–40 bars from the end, the tool's wind
 allowed 20. Changed to 28–40, reproduces nine of ten last-cue positions. Phrase
 weight 1.6 → 2.2. Full numbers in CHANGELOG 0.9.0a7.
 
-Batch 2 (10 tracks): confirmed the outro fix held (his last cues 28–41 from end) and
-surfaced the phrase-grid offset. 84% of his cues across both batches sit exactly on a
-PSSI boundary. On tracks whose phrase grid is shifted off the 8-grid by a constant
-(Heart in Hand +2, Talk Box +4), he cues the phrase, not the bar; snap now detects a
-regular shifted grid per track and snaps to phrases there, 8-grid otherwise. Modest:
-70% → 72% exact. CHANGELOG 0.9.0a8.
+Batch 2 (10 tracks): confirmed the outro fix held and surfaced the phrase-grid
+offset — on some tracks the PSSI boundaries sit at a constant offset from the 8-grid
+and the DJ cues the phrase. A per-track detector shipped in a8.
 
-**The method that worked, for next time:** don't hand-read the diff. Pull the DJ's
-final positions and the tool's written positions from the backup, bin both to bars,
-and grid-search the parameters against his positions (`~/work/rb_fit.py`,
-`rb_snaptest.py` on the mac are the scratch scripts). Test any proposed change on
-ALL vetted tracks before believing it — the naive phrase-snap looked obviously right
-and regressed the majority. A change that helps three tracks and hurts three is not a
-change.
+Batch 3 (10 tracks): the detector failed on unseen data — gained nothing overall and
+wrecked one track where the DJ cued the 8-grid despite a +5 phrase offset. Removed in
+a9. Two other ideas (anchor 32 → nearest phrase; outro phrase fallback) tested on all
+30 tracks and rejected. 28–40 outro window re-confirmed as the best window over 30
+tracks. Running total: 67% exact, 74% within two bars, 300 cues.
 
-State of the loop on 2026-09-19: 407 local tracks left. The top 40 are vetted and
-synced (deadmau5 – What A Save down to Vitess – Celebrity's batch, i.e. through the
-second batch ending at Tyler Mesa – Heart in Hand original). Batch 3 is Tyler Mesa –
-Heart in Hand (LUNR Remix) down to Tal Fussman – Life Itself, rebuilt with the
-28–40 window and the phrase-grid detector.
+**The method, for next time:** don't hand-read the diff. Bin the DJ's final positions
+and the tool's written positions to bars and score parameter variants against ALL
+vetted tracks (`~/work/rb_fit30.py` and `truth30.json` on the mac; the ground truth
+must be keyed by artist+title, not title alone). Report per-batch numbers, because a
+gain that lives only in the batch that suggested it is overfitting, not learning —
+that is exactly how the detector got in and exactly how it was caught. Two batches of
+evidence for a change; three tracks is an anecdote. **Record the written positions
+right after every write** (bars per track, into `~/work/written_batchN.json`) —
+Rekordbox hard-deletes cue rows the DJ removes, so the tool's own output cannot be
+reconstructed from the library afterwards.
+
+State of the loop on 2026-09-22: 407 local tracks left. The top 50 are vetted and
+synced, through Tal Fussman – Life Itself. Batch 4 starts at the next non-synced
+track by Date Added; the model is the a7 one (28–40 window, phrase 2.2, 8-grid snap).
 
 **`sound`** — waveform → per-track numbers. `-o FILE` `--limit N`
 

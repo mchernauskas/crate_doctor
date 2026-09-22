@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.9.0a9 — alpha
+
+### The phrase-grid detector is out — it did not survive its first unseen batch
+
+Third review batch. Thirty tracks and three hundred vetted cues now, with the
+ground truth keyed by artist *and* title (an earlier fit had let a second "Yeah" by
+a different artist into the set).
+
+The a8 detector was fit on batch two and gained six cues there. On batch three,
+the first data it had not seen, it gained nothing overall and turned one track into
+a one-in-ten: *That Boy* (Abe Duque remix) has PSSI boundaries at +5 off the
+8-grid, the detector snapped all ten cues onto them, and the DJ moved all ten back
+onto the 8-grid. So the DJ follows a shifted phrase grid on some tracks (Heart in
+Hand +2, Talk Box +4, the LUNR remix +1) and ignores it on others, and there is no
+rule in six examples that tells the two apart. Aggregate across 30 tracks: 8-grid
+snap 202/300, detector 207/300, and the whole five-cue difference is the batch it was
+trained on. A rule that only works on its training data is not a rule. Removed;
+worth another look at 60+ tracks.
+
+Two more ideas were tested on the full set and rejected before they shipped:
+
+- **Snap anchor 32 to a nearby phrase boundary.** Suggested by Serenata (32 → 24),
+  Calcio (32 → 36) and the LUNR remix (32 dropped for 24). Over 30 tracks it is
+  *worse* — 197 vs 202. The anchor stays where it is.
+- **Fall back to a phrase boundary when no energy drop qualifies for the outro cue.**
+  Suggested by Life Itself, where the tool placed no outro cue and the DJ added one
+  by hand. Harmless but changed nothing measurable, so not added.
+
+### What held
+
+The 28–40 outro window is still the best over all 30 tracks — 17 of 30 last cues
+exactly right, against 12–15 for every wider or earlier window tried. The DJ's last
+cue sits a median of 32 bars from the end; the spread is wider on tracks over 230
+bars (27–61) and on the one track under 120 bars (20), but no window that caters to
+those beats 28–40 overall. Phrase weight 2.2 unchanged. Overall agreement over three
+batches: 67% exact, 74% within two bars.
+
+The lesson for the loop: every change is now tested against *all* vetted tracks
+before it ships, and a gain that lives only in the batch that suggested it is
+discarded.
+
 ## 0.9.0a8 — alpha
 
 ### The 8-grid is not always the grid: snap to the phrase boundaries instead

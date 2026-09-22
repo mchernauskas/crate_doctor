@@ -820,39 +820,29 @@ def fix_cues(a):
                     dead = k < len(kb) and kb[k] < 0.25 and not any(abs(k - p) <= 2 for p in ph)
                     cand[k] = max(cand.get(k, 0), 1.0 if dead else 3.0)
 
-            # Pull near-misses onto the grid. An energy event a bar or two off a
-            # phrase boundary is the same musical moment as the boundary, and about
-            # 90% of the cues in this library sit on a multiple of 8. BUT the 8-grid
-            # is only the right grid when the track is phrased on it. Some tracks have
-            # an intro that shifts every phrase by a constant -- on the second review
-            # batch, Heart in Hand's PSSI boundaries were a clean 16-grid at +2 and
-            # Talk Box's at +4, and the DJ cued the phrase every time, not the bar.
-            # Snapping those to the 8-grid pulled a cue off all ten phrases.
+            # Pull near-misses onto the 8-grid. An energy event two bars off a
+            # phrase boundary is the same musical moment as the boundary, and 90%
+            # of the cues in this library sit on a multiple of 8. Tracks that
+            # genuinely do not work that way keep their off-grid position rather
+            # than being forced -- the grid is a strong habit, not a rule.
             #
-            # So decide per track. When the phrase boundaries share a dominant nonzero
-            # offset mod 8 (a regular, shifted grid), snap to the phrase boundaries;
-            # otherwise snap to the 8-grid as before. Measured across both batches
-            # (22 tracks, 219 vetted cues) this lifts exact agreement 70% -> 72% with
-            # within-two-bars unchanged -- a small, targeted win on the handful of
-            # offset tracks, and it deliberately does NOT fire on tracks whose phrasing
-            # is merely irregular (Polly's Acid Kiss), where the DJ cues the 8-grid.
+            # A "phrase-grid detector" lived here for one release (0.9.0a8): when a
+            # track's PSSI boundaries shared a nonzero offset mod 8, it snapped to
+            # the phrases instead. It was fit on batch two, where it gained six
+            # cues, and on batch three -- its first unseen data -- it gained nothing
+            # and turned one track (That Boy, Abe Duque remix, phrases at +5) into a
+            # 1-of-10, because the DJ cued that one on the 8-grid regardless. The DJ
+            # does follow shifted phrase grids on some tracks (Heart in Hand at +2,
+            # Talk Box at +4) and ignores them on others, and six examples are not
+            # enough to say which is which. Removed. Revisit at 60+ vetted tracks.
             if snap:
-                reg = [p for p in ph if 0 < p < endbar - floor]
-                phrase_offset = None
-                if len(reg) >= 4:
-                    mode, cnt = collections.Counter(p % 8 for p in reg).most_common(1)[0]
-                    if mode != 0 and cnt / len(reg) >= 0.6:
-                        phrase_offset = mode
                 snapped = {}
                 for k, sc in cand.items():
-                    if phrase_offset is not None:
-                        near = [p for p in ph if abs(p - k) <= max(snap, 4) and 0 <= p < endbar - floor]
-                        g = min(near, key=lambda p: abs(p - k)) if near else k
+                    g = int(round(k / 8.0)) * 8
+                    if g != k and abs(g - k) <= snap and 0 < g < endbar - floor:
+                        snapped[g] = max(snapped.get(g, 0), sc)
                     else:
-                        g = int(round(k / 8.0)) * 8
-                        if not (g != k and abs(g - k) <= snap and 0 < g < endbar - floor):
-                            g = k
-                    snapped[g] = max(snapped.get(g, 0), sc)
+                        snapped[k] = max(snapped.get(k, 0), sc)
                 cand = snapped
             # Two passes, because spacing is not one number. In this library
             # 16 bars is the ordinary gap (41%) and 8 is the exception (11%),
