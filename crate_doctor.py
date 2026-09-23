@@ -820,29 +820,46 @@ def fix_cues(a):
                     dead = k < len(kb) and kb[k] < 0.25 and not any(abs(k - p) <= 2 for p in ph)
                     cand[k] = max(cand.get(k, 0), 1.0 if dead else 3.0)
 
-            # Pull near-misses onto the 8-grid. An energy event two bars off a
-            # phrase boundary is the same musical moment as the boundary, and 90%
-            # of the cues in this library sit on a multiple of 8. Tracks that
-            # genuinely do not work that way keep their off-grid position rather
-            # than being forced -- the grid is a strong habit, not a rule.
+            # Pull near-misses onto the grid -- but which grid? An energy event two
+            # bars off a phrase boundary is the same musical moment as the boundary,
+            # and about 80% of the vetted cues in this library sit on a multiple of
+            # 8. On most tracks the 8-grid and Rekordbox's PSSI phrase boundaries
+            # agree and snapping to the 8-grid is right. On some tracks the phrasing
+            # is shifted off the bar grid by a constant -- Heart in Hand at +2, Talk
+            # Box at +4, Hak and the LUNR remix at +1 -- and there the DJ cues the
+            # phrase, not the bar, every time. Snapping those to the 8-grid puts
+            # every cue one to four bars off.
             #
-            # A "phrase-grid detector" lived here for one release (0.9.0a8): when a
-            # track's PSSI boundaries shared a nonzero offset mod 8, it snapped to
-            # the phrases instead. It was fit on batch two, where it gained six
-            # cues, and on batch three -- its first unseen data -- it gained nothing
-            # and turned one track (That Boy, Abe Duque remix, phrases at +5) into a
-            # 1-of-10, because the DJ cued that one on the 8-grid regardless. The DJ
-            # does follow shifted phrase grids on some tracks (Heart in Hand at +2,
-            # Talk Box at +4) and ignores them on others, and six examples are not
-            # enough to say which is which. Removed. Revisit at 60+ vetted tracks.
+            # So decide per track: when the phrase boundaries share a dominant
+            # nonzero offset mod 8 (60%+ at one offset -- a regular, shifted grid),
+            # snap to the phrases; otherwise snap to the 8-grid.
+            #
+            # History, because this rule has been in and out. It shipped in a8 on the
+            # strength of batch two (+6 cues), was removed in a9 when batch three
+            # showed no gain and one track (That Boy, Abe Duque remix, phrases at +5)
+            # went from 8/10 to 1/10 because the DJ ignored that track's phrasing. It
+            # is back in a10 because batch four added Hak (phrases at +1, DJ followed
+            # them, 1/10 -> 10/10). Scored against all 400 vetted cues it is 275 vs
+            # 262 without, and on the two batches it had never seen it is +7 net. That
+            # is the bar a rule has to clear -- it now does. It still gets the odd
+            # track wrong; that is the price of being right on the others.
             if snap:
+                reg = [p for p in ph if 0 < p < endbar - floor]
+                phrase_offset = None
+                if len(reg) >= 4:
+                    mode, cnt = collections.Counter(p % 8 for p in reg).most_common(1)[0]
+                    if mode != 0 and cnt / len(reg) >= 0.6:
+                        phrase_offset = mode
                 snapped = {}
                 for k, sc in cand.items():
-                    g = int(round(k / 8.0)) * 8
-                    if g != k and abs(g - k) <= snap and 0 < g < endbar - floor:
-                        snapped[g] = max(snapped.get(g, 0), sc)
+                    if phrase_offset is not None:
+                        near = [p for p in ph if abs(p - k) <= max(snap, 4) and 0 <= p < endbar - floor]
+                        g = min(near, key=lambda p: abs(p - k)) if near else k
                     else:
-                        snapped[k] = max(snapped.get(k, 0), sc)
+                        g = int(round(k / 8.0)) * 8
+                        if not (g != k and abs(g - k) <= snap and 0 < g < endbar - floor):
+                            g = k
+                    snapped[g] = max(snapped.get(g, 0), sc)
                 cand = snapped
             # Two passes, because spacing is not one number. In this library
             # 16 bars is the ordinary gap (41%) and 8 is the exception (11%),

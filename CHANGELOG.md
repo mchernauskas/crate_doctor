@@ -1,5 +1,56 @@
 # Changelog
 
+## 0.9.0a10 — alpha
+
+### Is the model actually improving? Measured, over 400 cues
+
+Fourth batch reviewed. Forty tracks, four hundred vetted cues. The question that
+matters — *is this loop making the tool better, or just busier?* — has a clean
+answer now, because every version can be scored against the same 400 positions:
+
+| model | exact | within 2 bars | b1 | b2 | b3 | b4 |
+|---|---|---|---|---|---|---|
+| original (Sep 10) | 246 (62%) | 285 (71%) | 69 | 58 | 65 | 54 |
+| a9 (outro 28–40, phrase 2.2) | 262 (66%) | 297 (74%) | 71 | 65 | 66 | 60 |
+| a10 (a9 + phrase-grid detector) | **275 (69%)** | 296 (74%) | 71 | 71 | 65 | 68 |
+
+Every batch scores higher under the current model than under the original. The
+improvement is real and it is modest: +29 cues in 400, about seven percentage
+points, from three measured rule changes. Nothing has regressed.
+
+**Why the week-to-week number looks like it is falling.** What the DJ kept of the
+tool's output, batch by batch: 85, 65, 65, 60 out of 100. That is not the model
+getting worse — it is the batches getting harder. Batch one was mostly one label
+with textbook 8-grid phrasing. Batch four had Hak (phrases at +1), Transamerican
+(irregular) and two Ben Klock remixes with almost no usable phrase data. Scored
+against batch four, the *original* model gets 54; the current one gets 60. The
+as-written number measures the batch as much as the model; the 400-cue scorecard
+measures the model.
+
+### The phrase-grid detector is back
+
+Removed in a9 after batch three, where it gained nothing and wrecked one track.
+Batch four added Hak: PSSI boundaries at +1 off the 8-grid, the DJ cued all ten on
+the phrases, and the detector takes that track from 1/10 to 10/10. On the two
+batches the rule had never been trained on it is now +7 net (−1 on b3, +8 on b4),
+and +13 over all 400. That is the bar it had to clear. It still misfires on the
+occasional track (the Abe Duque remix, phrases at +5, where the DJ ignores the
+phrasing) and a better trigger may exist — but with five follow-the-phrases tracks
+against one ignore-them, the rule as written is the honest reading of the data.
+
+### What did not change, and what is being watched
+
+Outro window 28–40 stays (the DJ's last cue over 40 tracks: median 32, 28 of 40
+inside the window). The no-outro-cue fallback stays out: Life Itself (batch 3) said
+yes, Shimmer (batch 4, last cue kept at 64 bars out on a 304-bar track) said no.
+Track-dependent, one each way. Anchor 32 unchanged.
+
+**Where the ceiling is.** 317 of the DJ's 400 cues sit on a PSSI phrase boundary and
+the tool already lands within two bars three times in four. What is left is mostly
+judgment the waveform cannot see — which of two equally-marked phrases to prefer,
+or a 16-grid the DJ lays down from a reference point of their own (Transamerican,
+bars 158/174/190/206). Expect gains from here to come one or two points at a time.
+
 ## 0.9.0a9 — alpha
 
 ### The phrase-grid detector is out — it did not survive its first unseen batch

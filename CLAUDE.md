@@ -383,7 +383,17 @@ Batch 3 (10 tracks): the detector failed on unseen data — gained nothing overa
 wrecked one track where the DJ cued the 8-grid despite a +5 phrase offset. Removed in
 a9. Two other ideas (anchor 32 → nearest phrase; outro phrase fallback) tested on all
 30 tracks and rejected. 28–40 outro window re-confirmed as the best window over 30
-tracks. Running total: 67% exact, 74% within two bars, 300 cues.
+tracks.
+
+Batch 4 (10 tracks): Hak (phrases at +1, DJ followed them) put the detector back over
+the bar — +7 on the two unseen batches combined, +13 over 400 — so it returned in a10.
+**Scorecard over all 400 vetted cues: original model 62% exact, current 69%. Every
+batch scores higher under the current model.** The as-written "kept" rate (85, 65,
+65, 60) is falling because the batches are getting harder, not because the model is:
+the original model would have scored 54 on batch four where the current scored 60.
+Always quote the 400-cue scorecard when asked whether the loop is working — the
+as-written number measures the batch as much as the model. Full table in CHANGELOG
+0.9.0a10.
 
 **The method, for next time:** don't hand-read the diff. Bin the DJ's final positions
 and the tool's written positions to bars and score parameter variants against ALL
@@ -396,9 +406,13 @@ right after every write** (bars per track, into `~/work/written_batchN.json`) �
 Rekordbox hard-deletes cue rows the DJ removes, so the tool's own output cannot be
 reconstructed from the library afterwards.
 
-State of the loop on 2026-09-22: 407 local tracks left. The top 50 are vetted and
-synced, through Tal Fussman – Life Itself. Batch 4 starts at the next non-synced
-track by Date Added; the model is the a7 one (28–40 window, phrase 2.2, 8-grid snap).
+State of the loop on 2026-09-23: 397 local tracks left. The top 60 are vetted and
+synced, through Stef Davidse – Burning Zone. Batch 5 starts at the next non-synced
+track by Date Added; the model is a10 (28–40 window, phrase 2.2, phrase-grid
+detector on). Scratch scripts on the mac: `~/work/rb_fit40.py` builds `truth40.json`
+from the batch key lists, `rb_score40.py` scores model variants against it; extend
+the key lists by one batch each round, and record each write's positions to
+`~/work/written_batchN_live.json` before the DJ touches it.
 
 **`sound`** — waveform → per-track numbers. `-o FILE` `--limit N`
 
