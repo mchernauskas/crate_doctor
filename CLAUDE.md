@@ -396,8 +396,16 @@ the same in every half-year since 2024, so it is their habit, not a phase.
 
 Where the next gain is: the 14% of last cues that sit on no phrase boundary at all,
 and the ±1-phrase misses (the DJ picks the boundary before or after the scorer's).
-And the phrase-grid detector hurts hand-only-cued tracks (−3.7 on 397); its trigger
-needs work.
+The phrase-grid detector's hand-only penalty was fixed in a13 by firing only for
+offsets 1–4 — offsets 5–7 are Rekordbox marking a phrase a bar or three early, and
+the DJ cues the downbeat there.
+
+**About the ground truth:** 62% of the library's cues are `CUE(Auto)` — Rekordbox's
+own placements, which the DJ accepted by syncing. They sit on phrase boundaries by
+construction. So "the DJ follows phrases" is partly "Rekordbox follows phrases and the
+DJ didn't object." The 397 hand-only tracks are the purer read of the DJ's own hand,
+and they lean more toward the 8-grid. Report results by tag group; a rule that helps
+mixed tracks and hurts hand-only ones is probably learning Rekordbox, not the DJ.
 
 **How to evaluate a change (the only way):**
 

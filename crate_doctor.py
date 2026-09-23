@@ -961,19 +961,25 @@ def fix_cues(a):
             #
             # This is the one batch-loop rule that survived the whole library. Scored
             # against the 2,770 vetted tracks the loop never touched, it is +0.9 on
-            # exact agreement, +0.3 within two bars, and neutral on the last cue --
-            # the only variant tried that improved on the original model on every
-            # measure. It helps most on tracks the DJ hand-cued around Rekordbox's
-            # own auto cues (+1.2) and least on tracks cued purely by hand (-3.7 on
-            # 397 tracks), so the trigger is not perfect and a better one may exist.
-            # It went in on batch two, out on batch three, back on batch four; the
-            # library settled it.
+            # exact agreement, +0.3 within two bars, and neutral on the last cue.
+            #
+            # The trigger only fires for offsets 1-4. When it fired on any offset it
+            # was a coin flip -- on 462 tracks the DJ followed the phrases on 216 and
+            # the 8-grid on 208 -- and it cost 2.3 points on tracks cued purely by
+            # hand. The offset value is what separates them: at +1 and +2 the DJ
+            # follows the phrases about two times in three; at +7 (which is -1: the
+            # phrase marked a bar EARLY) they follow the 8-grid two times in three,
+            # and +5 and +6 lean the same way. Those are Rekordbox's phrase detector
+            # anticipating the downbeat, not a shifted track. Limiting the trigger to
+            # 1-4 keeps the whole gain (66.0% vs 65.9% exact on the held-out half)
+            # and removes the hand-only penalty entirely (56.8%, identical to having
+            # no detector). Train and test halves agree to a tenth of a point.
             if snap:
                 reg = [p for p in ph if 0 < p < endbar - floor]
                 phrase_offset = None
                 if len(reg) >= 4:
                     mode, cnt = collections.Counter(p % 8 for p in reg).most_common(1)[0]
-                    if mode != 0 and cnt / len(reg) >= 0.6:
+                    if mode in (1, 2, 3, 4) and cnt / len(reg) >= 0.6:
                         phrase_offset = mode
                 snapped = {}
                 for k, sc in cand.items():

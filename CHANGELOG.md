@@ -1,5 +1,55 @@
 # Changelog
 
+## 0.9.0a13 — alpha
+
+### The phrase-grid detector only fires for offsets 1–4
+
+The detector (a8/a10) snaps cue candidates to Rekordbox's phrase boundaries instead
+of the 8-grid when a track's phrases share a nonzero offset from that grid. It was
+worth +0.9 exact library-wide but cost 3.7 points on the 397 tracks the DJ cued
+purely by hand. This release finds out why and fixes it.
+
+**When it fired, it was a coin flip.** On the 462 held-out tracks where the trigger
+went off, the DJ followed the phrase grid on 216 and the 8-grid on 208. The offset
+value is what separates them:
+
+| phrase offset | tracks | DJ follows phrases | DJ follows 8-grid |
+|---|---|---|---|
+| +1 | 72 | 62% | 31% |
+| +2 | 42 | 67% | 26% |
+| +4 | 160 | 49% | 37% |
+| +5 | 22 | 36% | 55% |
+| +6 | 26 | 42% | 50% |
+| +7 | 123 | 31% | 68% |
+
+An offset of +7 is −1: Rekordbox marked the phrase a bar *before* the downbeat. The
+DJ cues the downbeat. +5 and +6 are the same anticipation, two and three bars out.
+Those are detector artefacts, not shifted tracks, and the hand-only set is heavy in
+them — 70 of its 145 fired tracks are +7.
+
+Restricting the trigger to offsets 1–4, on the held-out half (1,385 tracks):
+
+| trigger | exact | within 2 | hand-only | mixed | auto-only |
+|---|---|---|---|---|---|
+| off | 64.96% | 70.45% | 56.8% | 65.7% | 71.0% |
+| any offset (a12) | 65.94% | 70.75% | 54.5% | 67.4% | 71.8% |
+| **offsets 1–4 (a13)** | **66.02%** | 70.67% | **56.8%** | 67.1% | 71.2% |
+
+Same overall gain, and the hand-only penalty is gone — 56.8%, identical to having no
+detector at all. Train and test halves agree to a tenth (65.97 / 66.02). Seven
+variants were tried (offset sets, share thresholds, excluding mood 2); this was the
+best on exact and the only one that fully removed the penalty. Verified with the real
+`fix_cues` over the same 300-track scratch sample: 65.1% exact, up from 64.1% under
+a12, last cue unchanged.
+
+**A caveat about the ground truth that surfaced here.** Even at +1, hand-only tracks
+go to the grid (62%) where mixed tracks go to the phrases (76%). Mixed tracks carry
+Rekordbox's own `CUE(Auto)` cues, which sit on phrase boundaries by construction — so
+part of the library's phrase-following is Rekordbox's, not the DJ's. The DJ has said
+synced tracks are vetted and that stands as the training set, but the hand-only
+subset is the purer read of their own hand, and any rule that helps mixed tracks
+while hurting hand-only ones deserves suspicion.
+
 ## 0.9.0a12 — alpha
 
 ### The last cue is a structural pick, and the old rule had it backwards
