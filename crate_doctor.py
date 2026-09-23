@@ -641,13 +641,23 @@ def outro_cue(kb, bars, endbar, have, lo, hi, phrase_bars, minspace):
     lo..hi bars from the end. That is where the outro actually starts, which is
     where you want to be cued to mix out — not in the dead air after it.
 
-    The window defaults to 28-40 bars from the end, and that number is measured,
-    not chosen. On the first reviewed batch the DJ moved the final cue on five of
-    the seven tracks they changed, every time in the same direction — earlier —
-    from 17-22 bars out to 28-36. Their vetted last cues land at 28, 29, 29, 30,
-    31, 33, 33, 34, 36 and 40 bars from the end, with nothing below 28. The old
-    20-36 window was placing cues in the last 20 bars, which is past the point
-    where there is enough track left to mix out of.
+    The window is 20-36 bars from the end. That is where the DJ's last cue sits
+    across the whole library: over 2,770 vetted tracks the last cue is a median 31
+    bars from the end, p25 at 20, p75 at 34, and that shape is the same in every
+    half-year from 2024 to 2026.
+
+    History, because this went wrong once. The window was moved to 28-40 for three
+    releases (a7-a10) on the strength of the first ten-track review batch, where
+    the DJ moved five last cues later and none earlier. Those ten tracks were not
+    the library: their last cues sat at a median 33 with only 5% inside 24 bars,
+    against 35% inside 24 bars library-wide. Scored against the 2,770 tracks the
+    batch loop never touched, 28-40 got the last cue exactly right on 21% of tracks
+    where 20-36 gets 27%, and lost on overall agreement too. Reverted. The lesson
+    is written in CLAUDE.md: the library is the training set, the batches are the
+    hypothesis generator, and nothing ships on the batches alone.
+
+    At 27% exact the last cue is still the weakest placement the tool makes, and
+    the gain is in finding the outro better within the window, not in moving it.
     """
     best = None
     for k in range(max(1, endbar - hi), endbar - lo + 1):
@@ -782,13 +792,15 @@ def fix_cues(a):
                 d = kb[k:k + 4].mean() - kb[max(0, k - 4):k].mean()
                 if abs(d) > 0.20:
                     cand[k] = 1.5 + min(abs(d), 1)
-            # A phrase boundary is the strongest single reason to put a cue somewhere.
-            # Measured on the first reviewed batch: 86 of the DJ's 100 vetted cues sit
-            # exactly on a PSSI boundary, 91 within two bars. At the old weight of 1.6
-            # the model agreed with them 78% of the time; at 2.2 it agrees 85%.
+            # A phrase boundary is the strongest single reason to put a cue somewhere:
+            # 89% of the 26,421 vetted cues in this library sit exactly on a PSSI
+            # boundary. The weight was raised to 2.2 for two releases on the strength
+            # of a ten-track batch (78% -> 85% agreement there). Scored against the
+            # whole library it is a wash -- +0.2 exact, -0.2 within two bars, -1 on
+            # the last cue -- so it is back at the value the library was measured at.
             for k in ph:
                 if 1 <= k < endbar - floor:
-                    cand[k] = max(cand.get(k, 0), 2.2)
+                    cand[k] = max(cand.get(k, 0), 1.6)
             # The grid is a bonus on bars the music already marks, not a reason
             # on its own. Weighting bar 16 unconditionally makes it fire on nearly
             # every track; in this library it carries a cue about half the time,
@@ -834,15 +846,15 @@ def fix_cues(a):
             # nonzero offset mod 8 (60%+ at one offset -- a regular, shifted grid),
             # snap to the phrases; otherwise snap to the 8-grid.
             #
-            # History, because this rule has been in and out. It shipped in a8 on the
-            # strength of batch two (+6 cues), was removed in a9 when batch three
-            # showed no gain and one track (That Boy, Abe Duque remix, phrases at +5)
-            # went from 8/10 to 1/10 because the DJ ignored that track's phrasing. It
-            # is back in a10 because batch four added Hak (phrases at +1, DJ followed
-            # them, 1/10 -> 10/10). Scored against all 400 vetted cues it is 275 vs
-            # 262 without, and on the two batches it had never seen it is +7 net. That
-            # is the bar a rule has to clear -- it now does. It still gets the odd
-            # track wrong; that is the price of being right on the others.
+            # This is the one batch-loop rule that survived the whole library. Scored
+            # against the 2,770 vetted tracks the loop never touched, it is +0.9 on
+            # exact agreement, +0.3 within two bars, and neutral on the last cue --
+            # the only variant tried that improved on the original model on every
+            # measure. It helps most on tracks the DJ hand-cued around Rekordbox's
+            # own auto cues (+1.2) and least on tracks cued purely by hand (-3.7 on
+            # 397 tracks), so the trigger is not perfect and a better one may exist.
+            # It went in on batch two, out on batch three, back on batch four; the
+            # library settled it.
             if snap:
                 reg = [p for p in ph if 0 < p < endbar - floor]
                 phrase_offset = None
@@ -3420,10 +3432,10 @@ def main():
                         '94%% and 81%% of this library). Empty string turns anchors off.')
     c.add_argument('--snap', type=int, default=2,
                    help='pull a cue within N bars of the 8-grid onto it (default 2, 0 = off)')
-    c.add_argument('--outro-lo', type=int, default=28,
-                   help='window for the final cue, nearest bar to the end (default 28 -- measured, '
-                        'see fix_cues)')
-    c.add_argument('--outro-hi', type=int, default=40, help='window for the final cue, furthest bar (default 40)')
+    c.add_argument('--outro-lo', type=int, default=20,
+                   help='window for the final cue, nearest bar to the end (default 20 -- measured '
+                        'over the whole library, see outro_cue)')
+    c.add_argument('--outro-hi', type=int, default=36, help='window for the final cue, furthest bar (default 36)')
     c.add_argument('--local', action='store_true',
                    help='with --fix: only tracks whose file is a real path here, not Cloud Library Sync entries')
     c.add_argument('--newest', type=int, default=0, metavar='N',

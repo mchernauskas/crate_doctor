@@ -368,51 +368,52 @@ miscount it as a replacement. When a number surprises you, check the timestamps
 before you build a story on it — and when the DJ says the story is wrong, they are
 probably right.
 
-**What the batches taught us:**
+**THE TRAINING SET IS THE WHOLE SYNCED LIBRARY, NOT THE BATCHES.** Every track the
+DJ has synced to Cloud Library Sync carries cues they consider fully vetted. On
+2026-09-23 that was 2,817 tracks and 26,886 memory cues. The batch loop's fifty
+tracks are 2% of it. This was said plainly by the DJ and missed for four releases,
+during which three "improvements" were fit to ten-track batches and shipped. Scored
+against the 2,770 synced tracks the loop never touched, two of the three made the
+tool worse and the "model is improving" scorecard in a10 was circular — it measured
+the changes on the cues they were fit to. a11 reverted them. The one that survived
+(the phrase-grid detector, +0.9 exact library-wide) is the only batch-loop rule
+still in the code. Full table in CHANGELOG 0.9.0a11.
 
-Batch 1 (10 tracks, 85 positions confirmed, 15 moved): the outro window was the real
-defect — every vetted last cue sits 28–40 bars from the end, the tool's window
-allowed 20. Changed to 28–40, reproduces nine of ten last-cue positions. Phrase
-weight 1.6 → 2.2. Full numbers in CHANGELOG 0.9.0a7.
+What the library says (held-out 2,770 tracks): original model 62.3% exact, 68.1%
+within two bars, last cue exactly right 27%. a11 is 63.2 / 68.4 / 27. 89% of the
+DJ's cues sit on a PSSI phrase boundary. Their last cue is a median 31 bars from the
+end with a quarter inside 20 — and that distribution is the same in every half-year
+since 2024, so it is their habit, not a phase. The last cue is the weakest thing the
+tool places and the next real gain lives there.
 
-Batch 2 (10 tracks): confirmed the outro fix held and surfaced the phrase-grid
-offset — on some tracks the PSSI boundaries sit at a constant offset from the 8-grid
-and the DJ cues the phrase. A per-track detector shipped in a8.
+**How to evaluate a change (the only way):**
 
-Batch 3 (10 tracks): the detector failed on unseen data — gained nothing overall and
-wrecked one track where the DJ cued the 8-grid despite a +5 phrase offset. Removed in
-a9. Two other ideas (anchor 32 → nearest phrase; outro phrase fallback) tested on all
-30 tracks and rejected. 28–40 outro window re-confirmed as the best window over 30
-tracks.
+1. `python3 ~/work/rb_build_all.py 150` on the mac, twice, after any sync — rebuilds
+   `~/work/truth_all.jsonl` (per synced track: bars, phrase boundaries, kick energy,
+   the DJ's cue bars, tags) from a fresh copy of `master.db` at `~/rb_ro/`.
+2. Add the variant to `~/work/rb_score_all.py` and score it against the tracks the
+   batches never touched. Report exact, within-two-bars, *and* last-cue-exact — a
+   change can trade one for another, and the last cue is the one to watch.
+3. Before shipping, drive the **real** `fix_cues --rebuild` over a few hundred synced
+   tracks on a scratch copy (`rb_realcheck.py` retags a sample as `CUE(Claude)`, moves
+   it to a fake local path, and dates it newest so `--local --newest N` scopes to it)
+   and score the output. The replica in `rb_score_all.py` matched the tool to the cue
+   on 300 tracks on 2026-09-23; re-check whenever `fix_cues` changes.
+4. Per-batch numbers from the loop are context, never evidence. A gain that lives
+   only in the batch that suggested it is overfitting.
 
-Batch 4 (10 tracks): Hak (phrases at +1, DJ followed them) put the detector back over
-the bar — +7 on the two unseen batches combined, +13 over 400 — so it returned in a10.
-**Scorecard over all 400 vetted cues: original model 62% exact, current 69%. Every
-batch scores higher under the current model.** The as-written "kept" rate (85, 65,
-65, 60) is falling because the batches are getting harder, not because the model is:
-the original model would have scored 54 on batch four where the current scored 60.
-Always quote the 400-cue scorecard when asked whether the loop is working — the
-as-written number measures the batch as much as the model. Full table in CHANGELOG
-0.9.0a10.
+The batches still matter: the DJ's edits to a fresh batch are the only view of what
+they want *now*, and every hypothesis so far came from one. Record each write's
+positions to `~/work/written_batchN_live.json` before the DJ touches the batch —
+Rekordbox hard-deletes removed cue rows, so the tool's output cannot be reconstructed
+from the library afterwards. Then diff by position.
 
-**The method, for next time:** don't hand-read the diff. Bin the DJ's final positions
-and the tool's written positions to bars and score parameter variants against ALL
-vetted tracks (`~/work/rb_fit30.py` and `truth30.json` on the mac; the ground truth
-must be keyed by artist+title, not title alone). Report per-batch numbers, because a
-gain that lives only in the batch that suggested it is overfitting, not learning —
-that is exactly how the detector got in and exactly how it was caught. Two batches of
-evidence for a change; three tracks is an anecdote. **Record the written positions
-right after every write** (bars per track, into `~/work/written_batchN.json`) —
-Rekordbox hard-deletes cue rows the DJ removes, so the tool's own output cannot be
-reconstructed from the library afterwards.
-
-State of the loop on 2026-09-23: 397 local tracks left. The top 60 are vetted and
-synced, through Stef Davidse – Burning Zone. Batch 5 starts at the next non-synced
-track by Date Added; the model is a10 (28–40 window, phrase 2.2, phrase-grid
-detector on). Scratch scripts on the mac: `~/work/rb_fit40.py` builds `truth40.json`
-from the batch key lists, `rb_score40.py` scores model variants against it; extend
-the key lists by one batch each round, and record each write's positions to
-`~/work/written_batchN_live.json` before the DJ touches it.
+State of the loop on 2026-09-23: 397 local tracks left; 60 vetted and synced through
+Stef Davidse – Burning Zone. **Batch 5 (L'Acrobat ×3 → Satoshi Tomiie – Resonant) was
+written with the a10 model** before the library-wide check — its last cues sit 30–50
+bars from the end where a11 would put them at 20–36. Left in place deliberately: the
+DJ's edits to it are the cleanest test yet of whether their current taste matches
+their library. Batch 6 onward is a11.
 
 **`sound`** — waveform → per-track numbers. `-o FILE` `--limit N`
 

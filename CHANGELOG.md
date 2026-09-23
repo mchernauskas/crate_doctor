@@ -1,5 +1,65 @@
 # Changelog
 
+## 0.9.0a11 — alpha
+
+### The whole library is the training set. The batch loop overfit, and this reverts it.
+
+The DJ pointed out that every Cloud-Library-Synced track carries cues they consider
+vetted — not just the fifty reviewed in the batch loop. That is 2,817 tracks and
+26,886 memory cues, fifty times the ground truth the a7–a10 changes were validated
+on. Scored against the 2,770 synced tracks the loop never touched:
+
+| model | exact | within 2 bars | last cue exactly right |
+|---|---|---|---|
+| original (Sep 10) | 62.3% | 68.1% | 27% |
+| a7 (outro 28–40, floor 28, phrase 2.2) | 62.1% | 67.5% | 21% |
+| a10 (a7 + phrase-grid detector) | 62.8% | 67.6% | 21% |
+| **a11 (original + detector only)** | **63.2%** | **68.4%** | **27%** |
+
+Each a7 change on its own, against the same 2,770 tracks:
+
+- **Outro window 28–40**: last cue exactly right falls from 27% to 24%; overall
+  agreement down 0.4. The ten-track batch it was fit on had last cues at a median 33
+  bars from the end with 5% inside 24 bars. The library has a median of 31 with
+  **35% inside 24 bars — and that shape is identical in every half-year from 2024 to
+  2026.** Those ten tracks were not the library. Reverted to 20–36.
+- **Floor 28**: +0.5 exact but −2 on the last cue, because it forbids the last cue
+  from sitting where a third of the DJ's actually do. Back to the measured default.
+- **Phrase weight 2.2**: +0.2 / −0.2 / −1. A wash. Back to 1.6.
+- **Phrase-grid detector**: +0.9 exact, +0.3 within two, last cue unchanged. The
+  only change that improved on every measure. Kept. It helps most on tracks
+  hand-cued around Rekordbox's own auto cues (+1.2 on 2,083 tracks) and hurts on
+  tracks cued purely by hand (−3.7 on 397), so the trigger is not right yet.
+
+The a10 claim that the model had improved "+29 cues in 400, every batch higher"
+was true of the 400 cues the changes were fit to and false of the library. The
+scorecard was circular. This release corrects the record.
+
+**Verified against the real code, not a replica.** `fix_cues --rebuild` was driven
+over 300 random synced tracks on a scratch copy and its output scored against the
+DJ's cues: 62.0% exact, 69.5% within two, 25% last cue — identical to the cue with
+the scoring replica on the same 300 tracks. The library-wide numbers above are the
+tool's own behaviour.
+
+### What the library says that the batches could not
+
+- 89% of 26,421 vetted cues sit exactly on a PSSI phrase boundary.
+- Last cue from the end: p5 16, p25 20, median 31, p75 34, p95 48. Stable over time.
+- 1,933 of 2,817 tracks carry exactly 10 cues; 492 carry 9; 386 carry 8.
+- 62% of cues carry `CUE(Auto)`, accumulated month by month since Nov 2024 and mixed
+  with hand-set cues on 2,109 tracks. The DJ counts them as vetted.
+- **The last cue is the weakest placement the tool makes** — right one time in four.
+  That is where the next real gain is, and it needs a better outro detector inside
+  the 20–36 window, not a different window.
+
+### Process from here
+
+Every proposed change is scored against the full synced library before it ships,
+by `~/work/rb_score_all.py` on the DJ's mac against `truth_all.jsonl` (rebuild the
+cache with `rb_build_all.py` after each sync — two calls of ~150 s). The ten-track
+batches stay: they are where hypotheses come from, and the DJ's edits are the only
+window into what they want *now*. But a batch cannot promote a change on its own.
+
 ## 0.9.0a10 — alpha
 
 ### Is the model actually improving? Measured, over 400 cues
