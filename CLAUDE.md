@@ -164,9 +164,16 @@ minimum of 8 bars.
 Note the circularity: since the floor *is* their 5th percentile, about 5% of tracks always
 sit below it. Present that list as outliers to eyeball, never as a to-do list.
 
-When placing a replacement final cue, put it on the **biggest drop in kick energy** in a
-window 20-36 bars from the end. That is where the outro actually starts, and where the DJ
-wants to be cued to mix out — not in the dead air after it.
+When placing the final cue, **do not look for the outro. Look for the last section
+before it.** This was got wrong for eleven releases. Rekordbox's `PSSI` tag labels every
+phrase (Intro / Up / Down / Chorus / Outro — `mood` sets the vocabulary), and on 2,770
+vetted tracks the DJ's last cue sits on Rekordbox's Outro only 7% of the time: that Outro
+starts ~10 bars from the end, too late to mix out of. What the DJ cues is the boundary
+that starts the **last long section** before it — a Chorus (51%), a Down (16%), an Up
+(8%) — where the kick is holding or *rising*. The old rule hunted the biggest kick *drop*,
+which is the moment after the right one. `outro_cue_structural()` scores boundaries with
+`OUTRO_W`, a linear model fit on half the library and tested on the other half: last cue
+exactly right 27% → 46%. Read the phrase kinds, not just the phrase bars.
 
 ### Tags: a tag is only useful if it narrows
 
@@ -380,17 +387,25 @@ the changes on the cues they were fit to. a11 reverted them. The one that surviv
 still in the code. Full table in CHANGELOG 0.9.0a11.
 
 What the library says (held-out 2,770 tracks): original model 62.3% exact, 68.1%
-within two bars, last cue exactly right 27%. a11 is 63.2 / 68.4 / 27. 89% of the
-DJ's cues sit on a PSSI phrase boundary. Their last cue is a median 31 bars from the
-end with a quarter inside 20 — and that distribution is the same in every half-year
-since 2024, so it is their habit, not a phase. The last cue is the weakest thing the
-tool places and the next real gain lives there.
+within two bars, last cue exactly right 27%. a11 is 63.2 / 68.4 / 27. **a12 is
+65.9 / 70.8 / 45.6 on the half it was not fit to** — the last cue was the weakest
+placement and the structural outro scorer (`outro_cue_structural`, CHANGELOG a12)
+nearly doubled it. 89% of the DJ's cues sit on a PSSI phrase boundary. Their last cue
+is a median 31 bars from the end with a quarter inside 20 — and that distribution is
+the same in every half-year since 2024, so it is their habit, not a phase.
+
+Where the next gain is: the 14% of last cues that sit on no phrase boundary at all,
+and the ±1-phrase misses (the DJ picks the boundary before or after the scorer's).
+And the phrase-grid detector hurts hand-only-cued tracks (−3.7 on 397); its trigger
+needs work.
 
 **How to evaluate a change (the only way):**
 
 1. `python3 ~/work/rb_build_all.py 150` on the mac, twice, after any sync — rebuilds
    `~/work/truth_all.jsonl` (per synced track: bars, phrase boundaries, kick energy,
-   the DJ's cue bars, tags) from a fresh copy of `master.db` at `~/rb_ro/`.
+   the DJ's cue bars, tags) from a fresh copy of `master.db` at `~/rb_ro/`. Then
+   `rb_pssi.py 150`, twice, for `pssi_all.jsonl` (mood, end_beat, and every phrase
+   boundary with its kind). Both scripts resume, so re-running only adds new tracks.
 2. Add the variant to `~/work/rb_score_all.py` and score it against the tracks the
    batches never touched. Report exact, within-two-bars, *and* last-cue-exact — a
    change can trade one for another, and the last cue is the one to watch.

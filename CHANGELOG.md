@@ -1,5 +1,51 @@
 # Changelog
 
+## 0.9.0a12 — alpha
+
+### The last cue is a structural pick, and the old rule had it backwards
+
+The final cue was the weakest thing the tool placed — right one time in four across
+the library. It is now right nearly one time in two, and it took the whole library
+to see why.
+
+Rekordbox's song-structure tag (`PSSI`) does not just mark phrase boundaries; it
+labels them — Intro, Up, Down, Chorus, Outro (vocabulary set by `mood`). The tool
+had been reading the boundaries and throwing the labels away. With the labels, on
+2,770 vetted tracks:
+
+- 86% of the DJ's last cues sit on a phrase boundary. **Only 7% sit on the Outro.**
+  Rekordbox's Outro starts a median 10 bars from the end; the DJ cues 20–36 out.
+- What they cue is the boundary that starts the **last long section before the
+  Outro**: a Chorus on 51% of tracks, a Down on 16%, an Up on 8%. The phrase it
+  starts is 8 bars long on 951 tracks and 16 on 737.
+- At that bar the kick is holding or rising. The old `outro_cue` looked for the
+  biggest *fall* in kick energy — the breakdown into the outro — which is the moment
+  *after* the one the DJ wants. Its `kickdrop` weight in the new model is −1.5.
+
+`outro_cue_structural()` scores every phrase boundary 8–72 bars from the end (plus
+any kick-drop bar 16–40 out, so a track with useless phrase data still gets a cue)
+with a 21-term linear model and takes the best. The weights are the coefficients of
+a logistic regression fit to half the library and tested on the other half, rounded
+to one decimal and named in `OUTRO_W`. The old `outro_cue` remains as the fallback
+when a track has no `PSSI` tag.
+
+**Held-out half, 1,385 tracks the fit never saw:**
+
+| | exact | within 2 bars | last cue exactly right |
+|---|---|---|---|
+| a11 | 63.4% | 68.3% | 26.9% |
+| **a12** | **65.9%** | **70.8%** | **45.6%** |
+
+Train-half last-cue accuracy is 44.3%, so there is no overfit. All three measures
+improve; nothing traded. Verified against the real code: `fix_cues --rebuild` over
+300 synced tracks on a scratch copy chose the same last cue as the scoring replica
+on 300 of 300, and scored 64.1 / 71.3 / 39 (that sample is 10-cue tracks only and
+300 is small; the same subset runs 44% library-wide).
+
+The `--outro-lo` / `--outro-hi` flags still exist and still govern the fallback.
+`OUTRO_W` should be refit when the library has grown by a few hundred tracks —
+`~/work/rb_outro_fit.py` on the DJ's mac does it in a minute.
+
 ## 0.9.0a11 — alpha
 
 ### The whole library is the training set. The batch loop overfit, and this reverts it.

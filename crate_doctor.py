@@ -671,6 +671,103 @@ def outro_cue(kb, bars, endbar, have, lo, hi, phrase_bars, minspace):
     return best if (best and best[1] > 0.05) else None
 
 
+# Rekordbox's phrase kinds. PSSI.mood picks the vocabulary: 1 = "high" (Intro / Up /
+# Down / Chorus / Outro), 2 = "mid" and 3 = "low" (Intro / Verse 1-6 / Bridge /
+# Chorus / Outro). 91% of this library is mood 1.
+PHRASE_OUTRO = {1: 6, 2: 10, 3: 10}
+PHRASE_CHORUS = {1: 5, 2: 9, 3: 9}
+PHRASE_DOWN = {1: 3, 2: 8, 3: 8}      # mood 1 "Down"; Bridge stands in for mid/low
+PHRASE_UP = {1: 2}
+
+# The final cue is a structural pick, and these are its weights. They are the
+# coefficients of a logistic model fit to 1,385 of the DJ's vetted tracks and
+# tested on the other 1,385 -- last cue exactly right 45.6% on the held-out half,
+# against 26.9% for the kick-drop rule above. Rounded to a decimal; the rounding
+# costs nothing measurable. Fit 2026-09-23; refit when the library has grown by
+# a few hundred tracks (~/work/rb_outro_fit.py on the DJ's mac).
+OUTRO_W = dict(
+    on_phrase=2.3,        # the single biggest term: the last cue sits on a boundary
+    outro=-1.7,           # ...but NOT on Rekordbox's own Outro, which is ~10 bars from the end
+    len20=1.7, len12=1.0, len8=0.3,   # the phrase it starts is long: a whole section
+    fe_lt16=-0.9, fe16=0.4, fe20=0.1, fe24=0.6, fe28=1.0, fe36=0.1, fe48=-1.5,
+    kickdrop=-1.5,        # the kick RISES or holds here -- this is the last peak, not the breakdown
+    kick_after=0.5,
+    mod8=0.6, mod16=0.3,
+    down=0.8, up=0.5, chorus=0.2,
+    before_outro=-0.7,    # per 16 bars of distance from the Outro start
+    last_nonoutro=0.55,   # the last non-Outro boundary at least 16 bars out
+)
+
+
+def outro_cue_structural(kb, endbar, phk, mood, have, minspace):
+    """Where the DJ actually puts the last cue.
+
+    Measured on 2,770 vetted tracks: 86% of last cues sit on a Rekordbox phrase
+    boundary, but only 7% on the Outro -- Rekordbox's Outro starts a median 10
+    bars from the end, and the DJ wants 20-36. What they cue is the boundary that
+    starts the LAST LONG SECTION before it: 51% a Chorus, 16% a Down, 8% an Up. At
+    that bar the kick is holding or rising, which is why the old rule -- biggest
+    fall in kick energy -- was looking for the opposite of the right thing.
+
+    Candidates are every phrase boundary 8-72 bars from the end, plus any bar
+    16-40 out with a real kick drop so a track with useless phrase data can still
+    get a cue. Each is scored with OUTRO_W and the best wins. Returns None when
+    there is nothing to score; the caller falls back to outro_cue().
+    """
+    outro_k = PHRASE_OUTRO.get(mood, 10)
+    ph = sorted(phk)
+    outro_start = min([b for b in ph if phk[b] == outro_k], default=endbar)
+    last_nonoutro = max([b for b in ph if b < outro_start and endbar - b >= 16
+                         and phk[b] != outro_k], default=-1)
+    W = OUTRO_W
+
+    def score(b):
+        k = phk.get(b)
+        fe = endbar - b
+        if b in phk:
+            j = ph.index(b)
+            ln = (ph[j + 1] - b) if j + 1 < len(ph) else endbar - b
+        else:
+            ln = 0
+        before = kb[max(0, b - 4):b].mean() if b > 0 else 0
+        after = kb[b:b + 4].mean() if b < len(kb) else 0
+        s = 0.0
+        if b in phk:
+            s += W['on_phrase']
+        if k == outro_k:
+            s += W['outro']
+        if k == PHRASE_CHORUS.get(mood):
+            s += W['chorus']
+        if k == PHRASE_DOWN.get(mood):
+            s += W['down']
+        if k == PHRASE_UP.get(mood):
+            s += W['up']
+        s += W['len20'] if ln >= 20 else W['len12'] if ln >= 12 else W['len8'] if ln >= 8 else 0
+        s += (W['fe_lt16'] if fe < 16 else W['fe16'] if fe < 20 else W['fe20'] if fe < 24
+              else W['fe24'] if fe < 28 else W['fe28'] if fe < 36 else W['fe36'] if fe < 48
+              else W['fe48'])
+        s += W['kickdrop'] * float(before - after) + W['kick_after'] * float(after)
+        if b % 8 == 0:
+            s += W['mod8']
+        if b % 16 == 0:
+            s += W['mod16']
+        s += W['before_outro'] * ((outro_start - b) / 16.0 if outro_start > b else -1.0)
+        if b == last_nonoutro:
+            s += W['last_nonoutro']
+        return s
+
+    cands = {b for b in ph if 8 <= endbar - b <= 72 and b > 0}
+    for b in range(max(1, endbar - 40), endbar - 16 + 1):
+        before = kb[max(0, b - 4):b].mean()
+        after = kb[b:b + 4].mean() if b < len(kb) else 0
+        if before - after > 0.15:
+            cands.add(b)
+    cands = {b for b in cands if not any(abs(b - h) < minspace for h in have)}
+    if not cands:
+        return None
+    return max(cands, key=score)
+
+
 def fix_cues(a):
     if not a.tag and not a.all:
         sys.exit(
@@ -763,17 +860,33 @@ def fix_cues(a):
             keep_ours = [(c.InMsec or 0) for c in ours if (c.InMsec or 0) not in plan_del[cid]]
             keep = keep_all
             have = sorted(barof(m) for m in keep)
+            # Rekordbox's song-structure tag: every phrase boundary, and what KIND of
+            # phrase starts there. phk maps bar -> kind; ph is just the bars, kept
+            # because most of the scoring below only cares where the boundaries are.
             ph = set()
+            phk = {}
+            mood = 0
             try:
-                for e in ext.get_tag('PSSI').content.entries:
-                    ph.add(barof(t[max(0, min(len(t) - 1, e.beat - 1))]))
+                pssi = ext.get_tag('PSSI').content
+                mood = int(pssi.mood)
+                for e in pssi.entries:
+                    bar = barof(t[max(0, min(len(t) - 1, e.beat - 1))])
+                    ph.add(bar)
+                    phk.setdefault(bar, int(e.kind))
             except Exception:
                 pass
             picks = []
-            if not any(endbar - a.outro_hi <= h <= endbar - a.outro_lo for h in have):
-                b = outro_cue(kb, bars, endbar, have, a.outro_lo, a.outro_hi, ph, minspace)
-                if b:
-                    picks.append(b[0])
+            # The final cue first. Skip it only if a cue the run must respect (a
+            # hand-set one, under --tag) already sits in the zone a final cue lives in.
+            if not any(16 <= endbar - h <= 48 for h in have):
+                b = None
+                if phk:
+                    b = outro_cue_structural(kb, endbar, phk, mood, have, minspace)
+                if b is None:
+                    old = outro_cue(kb, bars, endbar, have, a.outro_lo, a.outro_hi, ph, minspace)
+                    b = old[0] if old else None
+                if b is not None:
+                    picks.append(b)
             # ---- where a cue could go, and how much each position is worth.
             #
             # The weights below are not taste, they are measured. Across 2,762
