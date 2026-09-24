@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.9.0a14 — alpha
+
+### Batch 5: the DJ's hand vs the library, measured, and one trigger value dropped
+
+Batch 5 was the ten tracks written under a10's 28–40 outro window, left in place
+after a11 reverted that window, as a deliberate test of whether the DJ's current
+hand matches their library. The DJ confirmed 75 of 100 positions — the best batch
+since the first — and kept nine of the ten late last cues where a10 put them. Their
+last cues across all five batches sit at a median of 33–34 bars from the end; the
+library's hand-only tracks sit at 28, the mixed tracks at 31.
+
+So the current hand *is* later than the library. The question was whether the model
+should follow it. Three tests, all against held-out hand-only tracks (the purest
+read of the DJ's own hand at scale), batch 5, and the mixed set:
+
+- **a12's structural scorer is right on hand-only tracks too**: last cue exact
+  29% against 18% for the old kick-drop rule and 14% for the a10 window. It is not a
+  Rekordbox artefact. It stays.
+- **A refit of the scorer on hand-only + batch tracks only** (238 tracks) scored
+  *worse* on the 199 held-out hand-only tracks — 26% vs 29% — and only won on the
+  ten batch-5 tracks. Too few tracks to fit 21 weights; it bent toward the batch.
+  Rejected.
+- **Nudging just the from-end weights** toward later cues: every variant within one
+  track of a12 on held-out hand-only. Noise. Rejected.
+
+The scorer's misses on batch 5 have a shape — it picked a Down phrase 16–27 bars out
+where the DJ cued the Chorus 33–40 out, four times in five — and that is the thing
+to watch as batches accumulate. At ~100 batch tracks a refit that weights them
+becomes viable. Not before.
+
+**Trigger: offset +3 dropped.** The detector now fires for offsets 1, 2 and 4 only.
++3 fires on five tracks in the library and scores identically with or without them;
+the one +3 track in batch 5 (Loneliness, Holger Zilske remix) had all ten cues moved
+back to the 8-grid by hand. A coin flip in the library plus a clear no from the
+hand: the tie goes to not firing. Batch 5 under a14 would have scored 76, one
+better than the a10 model that wrote it.
+
 ## 0.9.0a13 — alpha
 
 ### The phrase-grid detector only fires for offsets 1–4

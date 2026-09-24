@@ -431,12 +431,17 @@ positions to `~/work/written_batchN_live.json` before the DJ touches the batch �
 Rekordbox hard-deletes removed cue rows, so the tool's output cannot be reconstructed
 from the library afterwards. Then diff by position.
 
-State of the loop on 2026-09-23: 397 local tracks left; 60 vetted and synced through
-Stef Davidse – Burning Zone. **Batch 5 (L'Acrobat ×3 → Satoshi Tomiie – Resonant) was
-written with the a10 model** before the library-wide check — its last cues sit 30–50
-bars from the end where a11 would put them at 20–36. Left in place deliberately: the
-DJ's edits to it are the cleanest test yet of whether their current taste matches
-their library. Batch 6 onward is a11.
+**The DJ's current hand vs the library (batch 5, a14).** The DJ kept nine of ten
+late last cues (30–50 bars out) that a10 had written; across five batches their last
+cue sits at a median 33–34 out, against 28 on the library's hand-only tracks and 31
+on mixed. The structural scorer still beats every alternative on held-out hand-only
+tracks (29% vs 18%), and a refit toward the batches lost on held-out hand tracks, so
+the model stays as fit. The recurring miss: the scorer picks a late Down where the
+DJ cues the last Chorus 33–40 out. Watch it; refit toward the batches at ~100 tracks.
+
+State of the loop on 2026-09-24: 387 local tracks left; 70 vetted and synced through
+Satoshi Tomiie – Resonant. Batch 6 onward is a14 (structural outro, phrase 1.6,
+detector on offsets 1/2/4). Cue count per batch: 85, 65, 65, 60, 75 confirmed.
 
 **`sound`** — waveform → per-track numbers. `-o FILE` `--limit N`
 

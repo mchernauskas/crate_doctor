@@ -974,12 +974,18 @@ def fix_cues(a):
             # 1-4 keeps the whole gain (66.0% vs 65.9% exact on the held-out half)
             # and removes the hand-only penalty entirely (56.8%, identical to having
             # no detector). Train and test halves agree to a tenth of a point.
+            #
+            # +3 was dropped in a14. It fires on five tracks in the whole library and
+            # scores identically with or without them; the one +3 track in the review
+            # loop (Loneliness, Holger Zilske remix) had all ten cues moved back to
+            # the 8-grid by the DJ. A coin flip in the library plus a clear no from
+            # the DJ's hand: the tie goes to not firing.
             if snap:
                 reg = [p for p in ph if 0 < p < endbar - floor]
                 phrase_offset = None
                 if len(reg) >= 4:
                     mode, cnt = collections.Counter(p % 8 for p in reg).most_common(1)[0]
-                    if mode in (1, 2, 3, 4) and cnt / len(reg) >= 0.6:
+                    if mode in (1, 2, 4) and cnt / len(reg) >= 0.6:
                         phrase_offset = mode
                 snapped = {}
                 for k, sc in cand.items():
