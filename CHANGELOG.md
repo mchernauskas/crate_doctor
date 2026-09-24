@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.9.0a15 — alpha
+
+### Phrase-snap only onto the detected grid — a stray marker dragged an anchor
+
+Caught by the DJ on the first track of batch 6, the same evening it was written.
+Satoshi Tomiie's *Bassline* is phrased at +4, so the detector fired and candidates
+were snapped onto phrase boundaries. Rekordbox had also marked a boundary at bar 32
+(0-indexed 31) — one bar early, the −1 artefact the a13 offset analysis identified —
+and the snap pulled the bar-32 anchor, the strongest habit in the library, onto it.
+The cue landed at Rekordbox's 32.1 instead of 33.1. A +1 straggler did the same to
+the cue at 58.
+
+In phrase-snap mode the target set is now only boundaries on the detected offset or
+on the 8-grid. Stragglers at any other offset are never a target; they are the
+artefact. Against the 2,770 held-out tracks the change is neutral — 65.98% vs
+66.00% exact, within-two identical — and it removes a failure that produces a cue
+one bar off the downbeat, which is the most visible kind of wrong.
+
 ## 0.9.0a14 — alpha
 
 ### Batch 5: the DJ's hand vs the library, measured, and one trigger value dropped

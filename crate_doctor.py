@@ -990,7 +990,15 @@ def fix_cues(a):
                 snapped = {}
                 for k, sc in cand.items():
                     if phrase_offset is not None:
-                        near = [p for p in ph if abs(p - k) <= max(snap, 4) and 0 <= p < endbar - floor]
+                        # Only onto boundaries that sit on the detected grid (or the
+                        # 8-grid). A track phrased at +4 can still carry a stray marker
+                        # at +7 -- Rekordbox anticipating a downbeat by a bar -- and
+                        # snapping onto one of those dragged the bar-32 anchor to bar
+                        # 31 on Satoshi Tomiie's Bassline (a14, caught by the DJ the
+                        # same evening). Stragglers off the grid are the artefact the
+                        # offset analysis identified; they are never a target.
+                        near = [p for p in ph if abs(p - k) <= max(snap, 4) and 0 <= p < endbar - floor
+                                and p % 8 in (phrase_offset, 0)]
                         g = min(near, key=lambda p: abs(p - k)) if near else k
                     else:
                         g = int(round(k / 8.0)) * 8
