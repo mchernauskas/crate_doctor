@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.9.0a16 — alpha
+
+### Batch 6: a phrase within a bar beats the grid
+
+72 of 100 confirmed; the DJ's cues sat exactly on a phrase boundary 92 times in
+100, the highest of any batch. The misses came in four shapes, each tested as a
+rule against the whole library and the 62 batch tracks:
+
+- **Phrase magnet — shipped.** Four cues on one track (Spin) and several on Italo
+  Disco were one bar off a phrase boundary: an energy event at 85 with the phrase
+  at 86, snapped to 88 by the 8-grid or left where it was. Now, in 8-grid mode, a
+  candidate that is *not* on the 8-grid and has a phrase boundary within one bar
+  goes to the phrase. Candidates already on the grid are left alone (a marker one
+  bar off a grid bar is the artefact a15 dealt with). Library-wide: exact 65.98% →
+  67.35%, up on hand-only (+0.2), mixed (+1.4) and auto-only (+2.9); within-two
+  unchanged; batches neutral (−0.3, two cues). Real `fix_cues` on the 300-track
+  sample: 65.8% from 65.1%.
+- **Gap-fill — rejected.** The DJ filled a 64-bar gap on Everyday Moments, and had
+  on Virton Upgraded and Übersprung before. But their own final sets carry a gap over
+  64 bars on 3.8% of tracks and over 56 on 6.9%, and a fill rule scored +0.03.
+  They fill some gaps and leave others, and the tool cannot tell which.
+- **Detector threshold 50% — rejected.** +0.17 on the library, +0.5 on batches,
+  and −0.4 on batches when combined with the magnet. Noise.
+- **Stragglers to the 8-grid in phrase mode — rejected.** Neutral.
+
+**The a15 fix was confirmed by the DJ's hand** before it was even committed: on
+Bassline they moved the cue from 32.1 to 33.1, exactly where the fixed snap puts it.
+
+**Italo Disco (0/10) explained.** Phrased at +2 with nine stray +6 markers. The a14
+snap dragged candidates onto the +6 stragglers; a15 excludes them and the magnet
+catches the energy events sitting a bar off the +2 phrases.
+
+**Still open.** Two last cues moved four bars earlier onto a 16-grid bar (Nemisis
+196 → 192, Controlled Collapse 164 → 160); library-wide the last cue sits on the
+16-grid 42% of the time against 27% on the off-16 8-grid, and the outro model's
+`mod16` weight may be light. And B Somebody, at 93 bars, wanted its last cue 17 bars
+out — the 20-bar floor should scale with track length. Both wait for more data.
+
+Running scorecard, held-out library: original 62.3% exact → a16 67.4%. Last cue
+27% → 46%.
+
 ## 0.9.0a15 — alpha
 
 ### Phrase-snap only onto the detected grid — a stray marker dragged an anchor

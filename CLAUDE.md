@@ -439,9 +439,11 @@ tracks (29% vs 18%), and a refit toward the batches lost on held-out hand tracks
 the model stays as fit. The recurring miss: the scorer picks a late Down where the
 DJ cues the last Chorus 33–40 out. Watch it; refit toward the batches at ~100 tracks.
 
-State of the loop on 2026-09-24: 387 local tracks left; 70 vetted and synced through
-Satoshi Tomiie – Resonant. Batch 6 onward is a14 (structural outro, phrase 1.6,
-detector on offsets 1/2/4). Cue count per batch: 85, 65, 65, 60, 75 confirmed.
+State of the loop on 2026-09-24 (evening): 377 local tracks left; 80 vetted and
+synced through Romain FX – Make Italo Disco Great Again. Batch 7 onward is a16
+(structural outro, phrase 1.6, detector on offsets 1/2/4 with strict targets, phrase
+magnet in 8-grid mode) and **batches are now 20 tracks**. Confirmed per batch: 85,
+65, 65, 60, 75, 72. Held-out library scorecard: original 62.3% → a16 67.4% exact.
 
 **`sound`** — waveform → per-track numbers. `-o FILE` `--limit N`
 

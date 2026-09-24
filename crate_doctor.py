@@ -1001,9 +1001,22 @@ def fix_cues(a):
                                 and p % 8 in (phrase_offset, 0)]
                         g = min(near, key=lambda p: abs(p - k)) if near else k
                     else:
-                        g = int(round(k / 8.0)) * 8
-                        if not (g != k and abs(g - k) <= snap and 0 < g < endbar - floor):
-                            g = k
+                        # A phrase boundary within one bar beats the 8-grid. An energy
+                        # event at bar 83 with a phrase at 82 is the phrase; sending it
+                        # to bar 80 puts it three bars off the moment. Candidates that
+                        # are already ON the 8-grid are left alone -- a phrase marker a
+                        # bar off a grid bar is the Rekordbox artefact, not a phrase.
+                        # Library-wide this is +1.4 exact (65.98 -> 67.35), up on hand,
+                        # mixed and auto-only alike; on the review batches it is
+                        # neutral. Batch 6 showed it four times on one track (Spin:
+                        # 85 -> 86, 117 -> 118 and two more).
+                        near1 = [p for p in ph if abs(p - k) <= 1 and 0 <= p < endbar - floor]
+                        if k % 8 != 0 and near1:
+                            g = min(near1, key=lambda p: abs(p - k))
+                        else:
+                            g = int(round(k / 8.0)) * 8
+                            if not (g != k and abs(g - k) <= snap and 0 < g < endbar - floor):
+                                g = k
                     snapped[g] = max(snapped.get(g, 0), sc)
                 cand = snapped
             # Two passes, because spacing is not one number. In this library
