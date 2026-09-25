@@ -153,6 +153,24 @@ They are hundreds of tiny files, they are not tracks, and they wreck every perce
 
 ## The two ideas the tool is built on
 
+### What the DJ is actually doing — in their words, 2026-09-25
+
+> Analyze the grid, not Rekordbox. Don't be influenced by the phrasing or what
+> Rekordbox did — make that assessment yourself. We're setting cues at major
+> energy/phrase shifts. The last one is usually around 32 bars before the end but
+> it's no hard rule: there are mix-out points before the actual outro, and if you
+> wait for the outro-outro there's already not enough energy left.
+
+Read that as the specification. Cues mark **major energy shifts**, judged from the
+waveform (three bands, 150 samples/sec, in the analysis files) and the beat grid.
+Rekordbox's phrase markers (`PSSI`) are Rekordbox's assessment of the same thing;
+they correlate with the DJ's cues because both track energy shifts, and where they
+disagree the DJ is right and the marker is wrong. Every failure the review batches
+turned up — markers a bar early, stragglers at odd offsets, the "last Chorus"
+model choosing the wrong one of two boundaries — was the tool trusting a marker
+over the music. The last cue is the **last big shift that still has energy after
+it**: a mix-out point, ~32 bars out as a habit, chosen by energy, not by label.
+
 ### Cues: a cue near the end of a track is worthless
 
 There is nothing left to mix into. On the library this was built against, the DJ's own
@@ -450,12 +468,22 @@ sample — and a change ships when batches and recent hand improve and the libra
 does not seriously fall. The outro model v2 was refit that way
 (`rb_outro_refit2.py`, batches ×30, recent ×15, two-fold CV).
 
+**The engine changed on 2026-09-25 (a18).** `place_energy()` — waveform bands plus
+the beat grid, no Rekordbox phrase data — is the default. The phrase engine (a7–a17)
+is behind `--engine phrase`. On the only clean test (85 tracks the DJ cued by hand,
+no tool involved) the energy engine scores 65.5% against the phrase engine's 62.8%.
+The batches favour the phrase engine because they were seeded with it; treat batch
+results from batch 9 on (energy-seeded) as the real read. `--phrase-bonus 1.0`
+adds ~1 point everywhere and is off by default at the DJ's request. The three
+scoring columns (batches / recent hand / library) are in `~/work/rb_energy_model.py`;
+the band cache is `bands_all.jsonl` (`rb_bands.py`, two calls of ~150 s).
+
 State of the loop on 2026-09-25: 357 local tracks left; 100 vetted and synced
-through QuiQui – You Are Imagination. Batch 8 onward is a17 (outro v2, early
-markers → grid, detector 1/2/4 strict, magnet), 20 tracks per batch. Confirmed per
-batch: 85, 65, 65, 60, 75, 72, 79. Open: the last cue on the batches is still ~50%
-— the misses are choices between two boundaries 31–43 out; and gap-filling is the
-DJ's habit but no fill rule has scored positive yet.
+through QuiQui – You Are Imagination. Batch 8 (QuiQui Alex Swank → Pan-Pot Crank)
+was written with a17 and should be re-cued with a18 before review. 20 tracks per
+batch. Confirmed per batch: 85, 65, 65, 60, 75, 72, 79. Open: the last cue is a
+choice between two adjacent shifts about half the time; gap-filling is the DJ's
+habit but no fill rule has scored positive.
 
 **`sound`** — waveform → per-track numbers. `-o FILE` `--limit N`
 

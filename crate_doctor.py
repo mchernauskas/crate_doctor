@@ -779,6 +779,134 @@ def outro_cue_structural(kb, endbar, phk, mood, have, minspace):
     return max(cands, key=score)
 
 
+def bands_per_bar(ext, ex2, t, bars, length_s):
+    """Lows, mids, highs per bar from the colour waveform, each band scaled so its
+    90th percentile on this track is 1.0. PWV7 (one byte per band) when present;
+    PWV5's 3-bit bands scaled by its height otherwise."""
+    a = None
+    if ex2 is not None:
+        try:
+            raw = ex2.get_tag('PWV7').content.entries
+            a = np.frombuffer(bytes(raw), dtype=np.uint8)
+            a = a[:len(a) // 3 * 3].reshape(-1, 3).astype(float)
+        except Exception:
+            a = None
+    if a is None:
+        w = np.array(ext.get_tag('PWV5').content.entries, dtype=np.uint16)
+        amp = ((w >> 2) & 31).astype(float)
+        a = np.stack([((w >> 13) & 7) * amp, ((w >> 10) & 7) * amp, ((w >> 7) & 7) * amp], 1).astype(float)
+    rate = len(a) / (length_s * 1000.0)
+    per = []
+    for k in range(len(bars)):
+        x = int(t[bars[k]] * rate)
+        y = int((t[bars[k + 1]] if k + 1 < len(bars) else length_s * 1000) * rate)
+        per.append(a[x:y].mean(0) if y > x else np.zeros(3))
+    per = np.array(per)
+    return per / (np.percentile(per, 90, axis=0) + 1e-6)
+
+
+# The energy engine's weights. Tuned 2026-09-25 against the DJ's own hand-cued
+# tracks from late 2026 and the review batches, with the library as a guard.
+ENERGY_W = dict(
+    wl=1.0, wm=0.7, wh=0.7,   # band weights in the shift magnitude
+    kickin=1.5,               # extra credit when the LOW end enters: the DJ's cues lean that way
+    mag=4.0,                  # shift magnitude -> candidate score
+    t32=1.2, t16=0.9, t8=0.3, # the grid, as a bonus on top of the music
+    anchor=3.0,               # bars 0 and 32: cued on 94% / 81% of tracks
+    minsc=0.15, wide_need=0.0, tight_need=1.2,
+    # the last cue: biggest shift with energy left, near 32 bars out
+    lo=48, hi=16, emin=0.55, near32=1.0, center=32, sig=8, g8=0.3, g16=0.2, eafter=0.5,
+)
+
+
+def place_energy(b3, endbar, target, minspace, floor, have=(), phrase_bars=(), phrase_bonus=0.0, W=ENERGY_W):
+    """Place cues at major energy shifts, judged from the waveform and the beat grid.
+
+    This is the DJ's own description of what they do, and it replaced the phrase-
+    based engine on 2026-09-25: "analyze the grid, not Rekordbox; we set cues at
+    major energy/phrase shifts; the last one is usually around 32 bars before the
+    end, no hard rule -- there are mix-out points before the actual outro."
+
+    b3 is (bars x 3) band energy from bands_per_bar(). A shift at bar k is the change
+    in each band between the four bars before k and the four from k. Measured on the
+    DJ's cues: they sit on bars with 2.4x the shift of other bars, the low end tends
+    to ENTER there (not drop out -- the old kick-drop rule was backwards), and they
+    are on the 8-grid 78% of the time. The last cue is the biggest shift in the last
+    48 bars that still has energy after it (the DJ's last cue leaves the track at a
+    median 83% of peak), with a soft preference for 32 bars out.
+
+    Scored against 85 tracks the DJ cued by hand in late 2026 with no tool involved:
+    65.5% of picks exactly on the DJ's bar, against 62.8% for the phrase engine.
+    Adding Rekordbox's phrase boundaries as a small bonus (phrase_bonus ~1.0) lifts
+    that to 66.3% and the library to 68.4%; it is off by default because the DJ
+    asked for the assessment to be the tool's own, and it is here because the
+    number is worth knowing.
+
+    Returns sorted bar indices. `have` are bars already cued (hand-set, under --tag)
+    that the picks must respect for spacing and count.
+    """
+    n = len(b3)
+    S = np.zeros((n, 3))
+    for k in range(1, n):
+        S[k] = b3[k:k + 4].mean(0) - b3[max(0, k - 4):k].mean(0)
+    tot = b3.sum(1)
+    E = tot / (np.percentile(tot, 90) + 1e-6)
+    mag = np.abs(S) @ np.array([W['wl'], W['wm'], W['wh']]) + W['kickin'] * np.clip(S[:, 0], 0, None)
+    ph = set(phrase_bars) if phrase_bonus else set()
+    picks = []
+    # ---- the last cue
+    if not any(16 <= endbar - h <= 48 for h in have):
+        best = None
+        for k in range(max(8, endbar - W['lo']), endbar - W['hi'] + 1):
+            if k <= 0 or any(abs(k - h) < minspace for h in have):
+                continue
+            e_after = E[k:k + 8].mean()
+            if e_after < W['emin']:
+                continue
+            sc = (mag[k] + W['near32'] * np.exp(-((endbar - k) - W['center']) ** 2 / (2 * W['sig'] ** 2))
+                  + (W['g8'] if k % 8 == 0 else 0) + (W['g16'] if k % 16 == 0 else 0) + W['eafter'] * e_after)
+            if k in ph:
+                sc += phrase_bonus
+            if best is None or sc > best[1]:
+                best = (k, sc)
+        if best:
+            picks.append(best[0])
+    # ---- the body
+    cand = {}
+    for k in range(1, endbar - int(floor)):
+        sc = W['mag'] * mag[k]
+        if k % 32 == 0:
+            sc += W['t32']
+        elif k % 16 == 0:
+            sc += W['t16']
+        elif k % 8 == 0:
+            sc += W['t8']
+        if k in ph:
+            sc += phrase_bonus
+        if sc > W['minsc']:
+            cand[k] = sc
+    for k in (0, 32):
+        if 0 <= k < endbar - floor:
+            cand[k] = max(cand.get(k, 0), W['anchor'] if E[k:k + 4].mean() > 0.25 else W['anchor'] / 3)
+    # snap to the 8-grid within two bars: a shift a bar off the grid IS the grid bar
+    snapped = {}
+    for k, sc in cand.items():
+        g = int(round(k / 8.0)) * 8
+        g = g if (g != k and abs(g - k) <= 2 and 0 < g < endbar - floor) else k
+        snapped[g] = max(snapped.get(g, 0), sc)
+    ordered = sorted(snapped.items(), key=lambda x: -x[1])
+    for need, gap in ((W['wide_need'], max(minspace, 16)), (W['tight_need'], minspace)):
+        for k, sc in ordered:
+            if len(have) + len(picks) >= target:
+                break
+            if sc < need or k in picks:
+                continue
+            if any(abs(k - h) < gap for h in have) or any(abs(k - k2) < gap for k2 in picks):
+                continue
+            picks.append(k)
+    return sorted(picks)
+
+
 def fix_cues(a):
     if not a.tag and not a.all:
         sys.exit(
@@ -887,9 +1015,13 @@ def fix_cues(a):
             except Exception:
                 pass
             picks = []
+            if getattr(a, 'engine', 'energy') == 'energy':
+                b3 = bands_per_bar(ext, ex2, t, bars, r.Length)
+                picks = place_energy(b3, endbar, target, minspace, floor, have=have,
+                                     phrase_bars=ph, phrase_bonus=getattr(a, 'phrase_bonus', 0.0))
             # The final cue first. Skip it only if a cue the run must respect (a
             # hand-set one, under --tag) already sits in the zone a final cue lives in.
-            if not any(16 <= endbar - h <= 48 for h in have):
+            if getattr(a, 'engine', 'energy') != 'energy' and not any(16 <= endbar - h <= 48 for h in have):
                 b = None
                 if phk:
                     b = outro_cue_structural(kb, endbar, phk, mood, have, minspace)
@@ -898,173 +1030,176 @@ def fix_cues(a):
                     b = old[0] if old else None
                 if b is not None:
                     picks.append(b)
-            # ---- where a cue could go, and how much each position is worth.
-            #
-            # The weights below are not taste, they are measured. Across 2,762
-            # tracks of vetted memory cues, the bars that actually carry a cue
-            # fall into three clear tiers:
-            #
-            #     bar 0    94%  |  bar 32   81%     anchors
-            #     bar 16   51%  |  bar 48   54%  |  bar 64  53%     the 16-grid
-            #     bar 8    13%  |  bar 24   19%  |  bar 40  25%     sparing
-            #
-            # So the shape is a 32-bar skeleton, with 16s filling in about half
-            # the time and the odd 8s reserved for tracks that ask for them. A
-            # flat "every 16 bars" misses that entirely.
-            cand = {}
-            for k in range(2, endbar - int(floor)):
-                d = kb[k:k + 4].mean() - kb[max(0, k - 4):k].mean()
-                if abs(d) > 0.20:
-                    cand[k] = 1.5 + min(abs(d), 1)
-            # A phrase boundary is the strongest single reason to put a cue somewhere:
-            # 89% of the 26,421 vetted cues in this library sit exactly on a PSSI
-            # boundary. The weight was raised to 2.2 for two releases on the strength
-            # of a ten-track batch (78% -> 85% agreement there). Scored against the
-            # whole library it is a wash -- +0.2 exact, -0.2 within two bars, -1 on
-            # the last cue -- so it is back at the value the library was measured at.
-            for k in ph:
-                if 1 <= k < endbar - floor:
-                    cand[k] = max(cand.get(k, 0), 1.6)
-            # The grid is a bonus on bars the music already marks, not a reason
-            # on its own. Weighting bar 16 unconditionally makes it fire on nearly
-            # every track; in this library it carries a cue about half the time,
-            # because the other half go straight from the top to bar 32. So a grid
-            # bar scores its full tier only when a phrase boundary or an energy
-            # change is sitting on it, and a weak fallback otherwise.
-            for k in range(8, max(9, endbar - int(floor)), 8):
-                backed = any(abs(k - p) <= 2 for p in ph) or cand.get(k, 0) >= 1.5
-                if k % 32 == 0:
-                    tier = 1.2 if backed else 0.75
-                elif k % 16 == 0:
-                    tier = 0.9 if backed else 0.45
-                else:
-                    tier = 0.25 if backed else 0.15
-                cand[k] = max(cand.get(k, 0), tier)
-
-            # Anchors outrank everything. These are the bars that are occupied in
-            # four out of five of your tracks, so unless something is already
-            # sitting there they get a cue before any energy event does.
-            for k in anchors:
-                # 0 <= , not 0 < . Bar 0 is the single most occupied position in
-                # this library (94%) and excluding it meant --rebuild stripped the
-                # opening downbeat from every track it touched.
-                if 0 <= k < endbar - floor:
-                    # Strong, not absolute. On a track where the anchor bar falls in
-                    # a dead patch -- a long ambient intro, a breakdown that happens
-                    # to sit there -- the music wins. That is why the measured
-                    # occupancy is 81% and not 100%.
-                    dead = k < len(kb) and kb[k] < 0.25 and not any(abs(k - p) <= 2 for p in ph)
-                    cand[k] = max(cand.get(k, 0), 1.0 if dead else 3.0)
-
-            # Pull near-misses onto the grid -- but which grid? An energy event two
-            # bars off a phrase boundary is the same musical moment as the boundary,
-            # and about 80% of the vetted cues in this library sit on a multiple of
-            # 8. On most tracks the 8-grid and Rekordbox's PSSI phrase boundaries
-            # agree and snapping to the 8-grid is right. On some tracks the phrasing
-            # is shifted off the bar grid by a constant -- Heart in Hand at +2, Talk
-            # Box at +4, Hak and the LUNR remix at +1 -- and there the DJ cues the
-            # phrase, not the bar, every time. Snapping those to the 8-grid puts
-            # every cue one to four bars off.
-            #
-            # So decide per track: when the phrase boundaries share a dominant
-            # nonzero offset mod 8 (60%+ at one offset -- a regular, shifted grid),
-            # snap to the phrases; otherwise snap to the 8-grid.
-            #
-            # This is the one batch-loop rule that survived the whole library. Scored
-            # against the 2,770 vetted tracks the loop never touched, it is +0.9 on
-            # exact agreement, +0.3 within two bars, and neutral on the last cue.
-            #
-            # The trigger only fires for offsets 1-4. When it fired on any offset it
-            # was a coin flip -- on 462 tracks the DJ followed the phrases on 216 and
-            # the 8-grid on 208 -- and it cost 2.3 points on tracks cued purely by
-            # hand. The offset value is what separates them: at +1 and +2 the DJ
-            # follows the phrases about two times in three; at +7 (which is -1: the
-            # phrase marked a bar EARLY) they follow the 8-grid two times in three,
-            # and +5 and +6 lean the same way. Those are Rekordbox's phrase detector
-            # anticipating the downbeat, not a shifted track. Limiting the trigger to
-            # 1-4 keeps the whole gain (66.0% vs 65.9% exact on the held-out half)
-            # and removes the hand-only penalty entirely (56.8%, identical to having
-            # no detector). Train and test halves agree to a tenth of a point.
-            #
-            # +3 was dropped in a14. It fires on five tracks in the whole library and
-            # scores identically with or without them; the one +3 track in the review
-            # loop (Loneliness, Holger Zilske remix) had all ten cues moved back to
-            # the 8-grid by the DJ. A coin flip in the library plus a clear no from
-            # the DJ's hand: the tie goes to not firing.
-            if snap:
-                reg = [p for p in ph if 0 < p < endbar - floor]
-                phrase_offset = None
-                if len(reg) >= 4:
-                    mode, cnt = collections.Counter(p % 8 for p in reg).most_common(1)[0]
-                    if mode in (1, 2, 4) and cnt / len(reg) >= 0.6:
-                        phrase_offset = mode
-                snapped = {}
-                for k, sc in cand.items():
-                    if phrase_offset is not None:
-                        # Only onto boundaries that sit on the detected grid (or the
-                        # 8-grid). A track phrased at +4 can still carry a stray marker
-                        # at +7 -- Rekordbox anticipating a downbeat by a bar -- and
-                        # snapping onto one of those dragged the bar-32 anchor to bar
-                        # 31 on Satoshi Tomiie's Bassline (a14, caught by the DJ the
-                        # same evening). Stragglers off the grid are the artefact the
-                        # offset analysis identified; they are never a target.
-                        near = [p for p in ph if abs(p - k) <= max(snap, 4) and 0 <= p < endbar - floor
-                                and p % 8 in (phrase_offset, 0)]
-                        g = min(near, key=lambda p: abs(p - k)) if near else k
+            if getattr(a, 'engine', 'energy') != 'energy':
+                # ---- the PHRASE engine (a7-a17). Kept behind --engine phrase for
+                # comparison; the energy engine above is the default since a18.
+                # ---- where a cue could go, and how much each position is worth.
+                #
+                # The weights below are not taste, they are measured. Across 2,762
+                # tracks of vetted memory cues, the bars that actually carry a cue
+                # fall into three clear tiers:
+                #
+                #     bar 0    94%  |  bar 32   81%     anchors
+                #     bar 16   51%  |  bar 48   54%  |  bar 64  53%     the 16-grid
+                #     bar 8    13%  |  bar 24   19%  |  bar 40  25%     sparing
+                #
+                # So the shape is a 32-bar skeleton, with 16s filling in about half
+                # the time and the odd 8s reserved for tracks that ask for them. A
+                # flat "every 16 bars" misses that entirely.
+                cand = {}
+                for k in range(2, endbar - int(floor)):
+                    d = kb[k:k + 4].mean() - kb[max(0, k - 4):k].mean()
+                    if abs(d) > 0.20:
+                        cand[k] = 1.5 + min(abs(d), 1)
+                # A phrase boundary is the strongest single reason to put a cue somewhere:
+                # 89% of the 26,421 vetted cues in this library sit exactly on a PSSI
+                # boundary. The weight was raised to 2.2 for two releases on the strength
+                # of a ten-track batch (78% -> 85% agreement there). Scored against the
+                # whole library it is a wash -- +0.2 exact, -0.2 within two bars, -1 on
+                # the last cue -- so it is back at the value the library was measured at.
+                for k in ph:
+                    if 1 <= k < endbar - floor:
+                        cand[k] = max(cand.get(k, 0), 1.6)
+                # The grid is a bonus on bars the music already marks, not a reason
+                # on its own. Weighting bar 16 unconditionally makes it fire on nearly
+                # every track; in this library it carries a cue about half the time,
+                # because the other half go straight from the top to bar 32. So a grid
+                # bar scores its full tier only when a phrase boundary or an energy
+                # change is sitting on it, and a weak fallback otherwise.
+                for k in range(8, max(9, endbar - int(floor)), 8):
+                    backed = any(abs(k - p) <= 2 for p in ph) or cand.get(k, 0) >= 1.5
+                    if k % 32 == 0:
+                        tier = 1.2 if backed else 0.75
+                    elif k % 16 == 0:
+                        tier = 0.9 if backed else 0.45
                     else:
-                        # A phrase boundary within one bar beats the 8-grid. An energy
-                        # event at bar 83 with a phrase at 82 is the phrase; sending it
-                        # to bar 80 puts it three bars off the moment. Candidates that
-                        # are already ON the 8-grid are left alone -- a phrase marker a
-                        # bar off a grid bar is the Rekordbox artefact, not a phrase.
-                        # Library-wide this is +1.4 exact (65.98 -> 67.35), up on hand,
-                        # mixed and auto-only alike; on the review batches it is
-                        # neutral. Batch 6 showed it four times on one track (Spin:
-                        # 85 -> 86, 117 -> 118 and two more).
-                        #
-                        # Except a marker at +5, +6 or +7: that is Rekordbox placing the
-                        # phrase a bar or three EARLY (the a13 offset analysis), and the
-                        # DJ cues the grid bar after it. So Beautiful had sixteen such
-                        # markers and the tool put six cues on them; the DJ moved every
-                        # one a bar later. Nuts had one; same. An early marker is not a
-                        # magnet target, and as a candidate it IS the grid bar after it.
-                        # Batches +1.5 exact, recent hand +0.5, library neutral.
-                        g8 = int(round(k / 8.0)) * 8
-                        early = k in ph and k % 8 in (5, 6, 7)
-                        if early and abs(g8 - k) <= 3 and 0 < g8 < endbar - floor:
-                            g = g8
+                        tier = 0.25 if backed else 0.15
+                    cand[k] = max(cand.get(k, 0), tier)
+
+                # Anchors outrank everything. These are the bars that are occupied in
+                # four out of five of your tracks, so unless something is already
+                # sitting there they get a cue before any energy event does.
+                for k in anchors:
+                    # 0 <= , not 0 < . Bar 0 is the single most occupied position in
+                    # this library (94%) and excluding it meant --rebuild stripped the
+                    # opening downbeat from every track it touched.
+                    if 0 <= k < endbar - floor:
+                        # Strong, not absolute. On a track where the anchor bar falls in
+                        # a dead patch -- a long ambient intro, a breakdown that happens
+                        # to sit there -- the music wins. That is why the measured
+                        # occupancy is 81% and not 100%.
+                        dead = k < len(kb) and kb[k] < 0.25 and not any(abs(k - p) <= 2 for p in ph)
+                        cand[k] = max(cand.get(k, 0), 1.0 if dead else 3.0)
+
+                # Pull near-misses onto the grid -- but which grid? An energy event two
+                # bars off a phrase boundary is the same musical moment as the boundary,
+                # and about 80% of the vetted cues in this library sit on a multiple of
+                # 8. On most tracks the 8-grid and Rekordbox's PSSI phrase boundaries
+                # agree and snapping to the 8-grid is right. On some tracks the phrasing
+                # is shifted off the bar grid by a constant -- Heart in Hand at +2, Talk
+                # Box at +4, Hak and the LUNR remix at +1 -- and there the DJ cues the
+                # phrase, not the bar, every time. Snapping those to the 8-grid puts
+                # every cue one to four bars off.
+                #
+                # So decide per track: when the phrase boundaries share a dominant
+                # nonzero offset mod 8 (60%+ at one offset -- a regular, shifted grid),
+                # snap to the phrases; otherwise snap to the 8-grid.
+                #
+                # This is the one batch-loop rule that survived the whole library. Scored
+                # against the 2,770 vetted tracks the loop never touched, it is +0.9 on
+                # exact agreement, +0.3 within two bars, and neutral on the last cue.
+                #
+                # The trigger only fires for offsets 1-4. When it fired on any offset it
+                # was a coin flip -- on 462 tracks the DJ followed the phrases on 216 and
+                # the 8-grid on 208 -- and it cost 2.3 points on tracks cued purely by
+                # hand. The offset value is what separates them: at +1 and +2 the DJ
+                # follows the phrases about two times in three; at +7 (which is -1: the
+                # phrase marked a bar EARLY) they follow the 8-grid two times in three,
+                # and +5 and +6 lean the same way. Those are Rekordbox's phrase detector
+                # anticipating the downbeat, not a shifted track. Limiting the trigger to
+                # 1-4 keeps the whole gain (66.0% vs 65.9% exact on the held-out half)
+                # and removes the hand-only penalty entirely (56.8%, identical to having
+                # no detector). Train and test halves agree to a tenth of a point.
+                #
+                # +3 was dropped in a14. It fires on five tracks in the whole library and
+                # scores identically with or without them; the one +3 track in the review
+                # loop (Loneliness, Holger Zilske remix) had all ten cues moved back to
+                # the 8-grid by the DJ. A coin flip in the library plus a clear no from
+                # the DJ's hand: the tie goes to not firing.
+                if snap:
+                    reg = [p for p in ph if 0 < p < endbar - floor]
+                    phrase_offset = None
+                    if len(reg) >= 4:
+                        mode, cnt = collections.Counter(p % 8 for p in reg).most_common(1)[0]
+                        if mode in (1, 2, 4) and cnt / len(reg) >= 0.6:
+                            phrase_offset = mode
+                    snapped = {}
+                    for k, sc in cand.items():
+                        if phrase_offset is not None:
+                            # Only onto boundaries that sit on the detected grid (or the
+                            # 8-grid). A track phrased at +4 can still carry a stray marker
+                            # at +7 -- Rekordbox anticipating a downbeat by a bar -- and
+                            # snapping onto one of those dragged the bar-32 anchor to bar
+                            # 31 on Satoshi Tomiie's Bassline (a14, caught by the DJ the
+                            # same evening). Stragglers off the grid are the artefact the
+                            # offset analysis identified; they are never a target.
+                            near = [p for p in ph if abs(p - k) <= max(snap, 4) and 0 <= p < endbar - floor
+                                    and p % 8 in (phrase_offset, 0)]
+                            g = min(near, key=lambda p: abs(p - k)) if near else k
                         else:
-                            near1 = [p for p in ph if abs(p - k) <= 1 and 0 <= p < endbar - floor
-                                     and p % 8 not in (5, 6, 7)]
-                            if k % 8 != 0 and near1:
-                                g = min(near1, key=lambda p: abs(p - k))
-                            elif g8 != k and abs(g8 - k) <= snap and 0 < g8 < endbar - floor:
+                            # A phrase boundary within one bar beats the 8-grid. An energy
+                            # event at bar 83 with a phrase at 82 is the phrase; sending it
+                            # to bar 80 puts it three bars off the moment. Candidates that
+                            # are already ON the 8-grid are left alone -- a phrase marker a
+                            # bar off a grid bar is the Rekordbox artefact, not a phrase.
+                            # Library-wide this is +1.4 exact (65.98 -> 67.35), up on hand,
+                            # mixed and auto-only alike; on the review batches it is
+                            # neutral. Batch 6 showed it four times on one track (Spin:
+                            # 85 -> 86, 117 -> 118 and two more).
+                            #
+                            # Except a marker at +5, +6 or +7: that is Rekordbox placing the
+                            # phrase a bar or three EARLY (the a13 offset analysis), and the
+                            # DJ cues the grid bar after it. So Beautiful had sixteen such
+                            # markers and the tool put six cues on them; the DJ moved every
+                            # one a bar later. Nuts had one; same. An early marker is not a
+                            # magnet target, and as a candidate it IS the grid bar after it.
+                            # Batches +1.5 exact, recent hand +0.5, library neutral.
+                            g8 = int(round(k / 8.0)) * 8
+                            early = k in ph and k % 8 in (5, 6, 7)
+                            if early and abs(g8 - k) <= 3 and 0 < g8 < endbar - floor:
                                 g = g8
                             else:
-                                g = k
-                    snapped[g] = max(snapped.get(g, 0), sc)
-                cand = snapped
-            # Two passes, because spacing is not one number. In this library
-            # 16 bars is the ordinary gap (41%) and 8 is the exception (11%),
-            # and the exceptions cluster on breakdowns and drops -- an 8-bar
-            # step is something the music earns, never filler used to reach a
-            # target. So: fill at the roomy spacing first, and only then allow
-            # tight ones, and only for candidates that are a real event.
-            wide = max(minspace, 16)
-            ordered = sorted(cand.items(), key=lambda x: -x[1])
-            for need_score, gap in ((0.0, wide), (1.5, minspace)):
-                for k, sc in ordered:
-                    if len(keep) + len(picks) >= target:
-                        break
-                    if sc < need_score:
-                        continue
-                    if k in picks:
-                        continue
-                    if any(abs(k - h) < gap for h in have):
-                        continue
-                    if any(abs(k - k2) < gap for k2 in picks):
-                        continue
-                    picks.append(k)
+                                near1 = [p for p in ph if abs(p - k) <= 1 and 0 <= p < endbar - floor
+                                         and p % 8 not in (5, 6, 7)]
+                                if k % 8 != 0 and near1:
+                                    g = min(near1, key=lambda p: abs(p - k))
+                                elif g8 != k and abs(g8 - k) <= snap and 0 < g8 < endbar - floor:
+                                    g = g8
+                                else:
+                                    g = k
+                        snapped[g] = max(snapped.get(g, 0), sc)
+                    cand = snapped
+                # Two passes, because spacing is not one number. In this library
+                # 16 bars is the ordinary gap (41%) and 8 is the exception (11%),
+                # and the exceptions cluster on breakdowns and drops -- an 8-bar
+                # step is something the music earns, never filler used to reach a
+                # target. So: fill at the roomy spacing first, and only then allow
+                # tight ones, and only for candidates that are a real event.
+                wide = max(minspace, 16)
+                ordered = sorted(cand.items(), key=lambda x: -x[1])
+                for need_score, gap in ((0.0, wide), (1.5, minspace)):
+                    for k, sc in ordered:
+                        if len(keep) + len(picks) >= target:
+                            break
+                        if sc < need_score:
+                            continue
+                        if k in picks:
+                            continue
+                        if any(abs(k - h) < gap for h in have):
+                            continue
+                        if any(abs(k - k2) < gap for k2 in picks):
+                            continue
+                        picks.append(k)
             # never exceed the target: drop tail-most cues OF OURS to make room.
             # Hand-set cues are never candidates, so with --tag on a track that already
             # has more hand cues than the target, nothing is removed and nothing added.
@@ -3612,6 +3747,13 @@ def main():
     c.add_argument('--newest', type=int, default=0, metavar='N',
                    help='with --fix: only the N most recently added tracks in scope. This is how a '
                         'review batch is cued without touching anything already vetted.')
+    c.add_argument('--engine', choices=('energy', 'phrase'), default='energy',
+                   help='energy (default): cues at major energy shifts, judged from the waveform and the '
+                        'beat grid. phrase: the older engine built on Rekordbox\'s phrase markers.')
+    c.add_argument('--phrase-bonus', type=float, default=0.0, metavar='X',
+                   help='energy engine only: add X to candidates on a Rekordbox phrase boundary. 0 = '
+                        'ignore Rekordbox\'s phrasing entirely (default). ~1.0 is worth about +1 point '
+                        'of agreement; off because the assessment should be the tool\'s own.')
     c.add_argument('--write', action='store_true', help='with --fix: actually apply the changes')
     c.set_defaults(func=cmd_cues)
 

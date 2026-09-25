@@ -1,5 +1,62 @@
 # Changelog
 
+## 0.9.0a18 — alpha
+
+### The energy engine: cues at major energy shifts, judged from the waveform and the grid
+
+The DJ, after batch 8 was written: *"Analyze the grid, not Rekordbox. Don't be
+influenced by the phrasing or what Rekordbox did — make that assessment yourself.
+We're setting cues at major energy/phrase shifts. The last one is usually around 32
+bars before the end but it's no hard rule; there are mix-out points before the actual
+outro, and if you wait for the outro-outro there's already not enough energy."*
+
+Every engine from a7 to a17 used Rekordbox's phrase markers as the primary signal
+and, for the last cue, its phrase *labels*. That is leaning on someone else's
+assessment. `place_energy()` replaces it. Its inputs are the three-band colour
+waveform (lows, mids, highs per bar, from `bands_per_bar()`) and the beat grid.
+Nothing else, unless `--phrase-bonus` is set.
+
+What the waveform says about the DJ's cues, with no phrase data involved (85
+hand-cued tracks from late 2026 plus the 83 batch tracks):
+
+- They sit on bars with **2.4× the energy shift** of other bars (median 0.50 vs
+  0.16, sum of absolute band changes between the 4 bars before and 4 bars from).
+- **The low end tends to enter at a cue** (mean Δlow +0.09), not drop out. The a6
+  "biggest kick drop" rule was looking for the opposite moment.
+- 78% on the 8-grid, 54% on 16, 27% on 32 — the DJ's habit, from the grid alone.
+- After the last cue the track still carries a **median 83% of its peak energy**.
+  That is the mix-out point with energy left, as described.
+
+The engine: a shift score per bar (band changes, low-end entry weighted extra), the
+grid as a bonus on top, anchors at 0 and 32, snap to the 8-grid within two bars, the
+two-pass spacing from before. The last cue is the biggest shift in the last 48 bars
+that still has energy after it, with a soft preference for 32 bars out.
+
+| model | batches 1–7 | **DJ's own hand, no tool** | library |
+|---|---|---|---|
+| a17 (phrase engine) | 73.1% | 62.8% | 67.3% |
+| **a18 energy engine** | 63.5% | **65.5%** | 66.4% |
+| energy + phrase bonus 1.0 | 66.4% | 66.3% | 68.4% |
+
+The batch column favours the phrase engine and is circular: batches 1–7 are
+phrase-placed cues the DJ mostly kept (the same problem `CUE(Auto)` gives the
+library), so they measure the old engine as much as the DJ. The middle column is
+the only uncontaminated test, and the energy engine wins it. The phrase bonus adds
+about a point everywhere; it is off by default because the assessment is meant to
+be the tool's own, and the flag is there because the number is worth knowing.
+
+Real `fix_cues --engine energy` over batch 7's twenty tracks: 134/200, identical to
+the replica. `--engine phrase` keeps the a17 engine for comparison.
+
+**Still open, and now visible in the waveform rather than hidden behind labels:**
+the remaining last-cue misses are one 8- or 16-bar step from the DJ's — the choice
+between two adjacent shifts. The DJ's spread (median 33 out) and the engine's (32)
+now match. And gap-filling remains the one habit no rule has scored positive on.
+
+**Batch 8 was written with a17 before this landed.** Re-cue it with the energy engine
+before the DJ reviews it, so the review is evidence about the new engine and not the
+old one.
+
 ## 0.9.0a17 — alpha
 
 ### Batch 7 (twenty tracks): the DJ's hand has moved, and the model now follows it
