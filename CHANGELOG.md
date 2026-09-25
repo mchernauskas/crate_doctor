@@ -1,5 +1,52 @@
 # Changelog
 
+## 0.9.0a17 — alpha
+
+### Batch 7 (twenty tracks): the DJ's hand has moved, and the model now follows it
+
+158 of 200 confirmed — 79%, the best rate yet. 175 of the DJ's 200 final cues sit
+exactly on a phrase boundary. And the batch settled two questions the library had
+been answering wrongly.
+
+**The last cue.** The tool put six last cues 16–19 bars from the end, where the
+library-fit scorer likes them. The DJ moved every one of them out — and six more
+besides: twelve of twenty later, none earlier. This is the fourth batch in a row
+saying the same thing, so the library was checked for *when* the DJ's own hand-cued
+tracks were cued. Median last cue: 25 bars out in 2024, 28 in 2025, 33 in late 2026.
+The batches say 33 with 6% inside 24 bars; the library as a whole says 30%. **The
+library is history and the DJ has moved.** The outro model is refit (v2) with the
+83 batch tracks at 30× and the 85 hand-only tracks cued since mid-2026 at 15×.
+Two-fold cross-validation, held out: last cue exact on batches 49% → 54%, on recent
+hand 33% → 42%, on the library 45.4% → 44.8%. Every from-end weight inside 28 bars
+went negative. (A plain floor at 24 bars was tried first and did nothing — the
+scorer just picked a different wrong boundary. The preference had to change, not
+the range.)
+
+**Early phrase markers are grid bars.** So Beautiful carries sixteen phrase markers
+at +7 — one bar before the downbeat. The a16 magnet kept six cues on them; the DJ
+moved every one a bar later onto the 8-grid. Nuts had one; same. A marker at +5, +6
+or +7 is now never a magnet target, and as a candidate it is snapped to the grid bar
+after it. Batches +1.5 exact, recent hand +0.5, library neutral.
+
+**Gaps, revisited.** The DJ filled 48+ bar gaps on three tracks (Spectral, Beneath,
+PSY), and the batches carry a gap over 48 bars on only 4% of tracks against 12–14%
+in the library — so gap-filling is the DJ's current habit and the a16 rejection was
+measuring old cue sets. But the fill rule as written still scores *worse* on the
+batches (71.6 → 71.1): it fills the gap in the wrong place or drops the wrong cue.
+The habit is real; the rule is not right yet.
+
+**Tried and dropped:** grid tiers relative to the detected phrase offset (+0.1,
+one cue); phrases before grid-fill in the wide pass (nothing).
+
+Real `fix_cues` re-run over batch 7's own tracks under a17: 164/200 (82%) against
+the 158 a16 wrote. Last cue on this batch unchanged at 8/20 — the remaining misses
+are choices between two boundaries 31–43 bars out that the current features do not
+separate. That is the next thing.
+
+**Evaluation policy, amended.** Where the library and the recent hand disagree and
+the DJ's own hand-cued tracks show a trend over time, the recent hand wins. The
+scorer now reports three columns: batches, recent hand-only (2026 H2), library.
+
 ## 0.9.0a16 — alpha
 
 ### Batch 6: a phrase within a bar beats the grid

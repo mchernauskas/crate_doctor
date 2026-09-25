@@ -679,23 +679,34 @@ PHRASE_CHORUS = {1: 5, 2: 9, 3: 9}
 PHRASE_DOWN = {1: 3, 2: 8, 3: 8}      # mood 1 "Down"; Bridge stands in for mid/low
 PHRASE_UP = {1: 2}
 
-# The final cue is a structural pick, and these are its weights. They are the
-# coefficients of a logistic model fit to 1,385 of the DJ's vetted tracks and
-# tested on the other 1,385 -- last cue exactly right 45.6% on the held-out half,
-# against 26.9% for the kick-drop rule above. Rounded to a decimal; the rounding
-# costs nothing measurable. Fit 2026-09-23; refit when the library has grown by
-# a few hundred tracks (~/work/rb_outro_fit.py on the DJ's mac).
+# The final cue is a structural pick, and these are its weights: the coefficients
+# of a logistic model over every phrase boundary 8-72 bars from the end.
+#
+# v1 (a12) was fit to the library alone and got the last cue right 45.6% of the
+# time on the half it had not seen -- against 26.9% for the kick-drop rule. But the
+# library is history: on the DJ's own hand-cued tracks the last cue moved from a
+# median 25 bars out in 2024 to 33 in late 2026, and on the seven review batches
+# (83 tracks of the DJ editing this tool's cues) it sits at 33 with only 6% inside
+# 24 bars, where the library has 30%. v1 learned the old habit and kept putting the
+# last cue on a Down phrase 16-23 bars out; the DJ moved twelve of twenty later on
+# batch seven alone, none earlier.
+#
+# v2 (a17) is fit to the library plus the batches at 30x and hand-only tracks cued
+# since mid-2026 at 15x. Two-fold cross-validation, held out: batches 49 -> 54%,
+# recent hand 33 -> 42%, library 45.4 -> 44.8%. Every from-end band inside 28 bars
+# went negative. Refit when another ~50 batch tracks are in
+# (~/work/rb_outro_refit2.py on the DJ's mac).
 OUTRO_W = dict(
-    on_phrase=2.3,        # the single biggest term: the last cue sits on a boundary
-    outro=-1.7,           # ...but NOT on Rekordbox's own Outro, which is ~10 bars from the end
-    len20=1.7, len12=1.0, len8=0.3,   # the phrase it starts is long: a whole section
-    fe_lt16=-0.9, fe16=0.4, fe20=0.1, fe24=0.6, fe28=1.0, fe36=0.1, fe48=-1.5,
-    kickdrop=-1.5,        # the kick RISES or holds here -- this is the last peak, not the breakdown
-    kick_after=0.5,
-    mod8=0.6, mod16=0.3,
-    down=0.8, up=0.5, chorus=0.2,
-    before_outro=-0.7,    # per 16 bars of distance from the Outro start
-    last_nonoutro=0.55,   # the last non-Outro boundary at least 16 bars out
+    on_phrase=2.37,       # the single biggest term: the last cue sits on a boundary
+    outro=-2.07,          # ...but NOT on Rekordbox's own Outro, which is ~10 bars from the end
+    len20=1.33, len12=0.76, len8=0.18,   # the phrase it starts is long: a whole section
+    fe_lt16=-1.87, fe16=-0.69, fe20=-0.64, fe24=-0.17, fe28=1.15, fe36=0.11, fe48=-1.31,
+    kickdrop=-1.58,       # the kick RISES or holds here -- this is the last peak, not the breakdown
+    kick_after=0.83,
+    mod8=0.6, mod16=0.4, mod32=0.04,
+    down=0.67, up=0.41, chorus=-0.02,
+    before_outro=-0.78,   # per 16 bars of distance from the Outro start
+    last_nonoutro=0.68,   # the last non-Outro boundary at least 16 bars out
 )
 
 
@@ -1010,12 +1021,26 @@ def fix_cues(a):
                         # mixed and auto-only alike; on the review batches it is
                         # neutral. Batch 6 showed it four times on one track (Spin:
                         # 85 -> 86, 117 -> 118 and two more).
-                        near1 = [p for p in ph if abs(p - k) <= 1 and 0 <= p < endbar - floor]
-                        if k % 8 != 0 and near1:
-                            g = min(near1, key=lambda p: abs(p - k))
+                        #
+                        # Except a marker at +5, +6 or +7: that is Rekordbox placing the
+                        # phrase a bar or three EARLY (the a13 offset analysis), and the
+                        # DJ cues the grid bar after it. So Beautiful had sixteen such
+                        # markers and the tool put six cues on them; the DJ moved every
+                        # one a bar later. Nuts had one; same. An early marker is not a
+                        # magnet target, and as a candidate it IS the grid bar after it.
+                        # Batches +1.5 exact, recent hand +0.5, library neutral.
+                        g8 = int(round(k / 8.0)) * 8
+                        early = k in ph and k % 8 in (5, 6, 7)
+                        if early and abs(g8 - k) <= 3 and 0 < g8 < endbar - floor:
+                            g = g8
                         else:
-                            g = int(round(k / 8.0)) * 8
-                            if not (g != k and abs(g - k) <= snap and 0 < g < endbar - floor):
+                            near1 = [p for p in ph if abs(p - k) <= 1 and 0 <= p < endbar - floor
+                                     and p % 8 not in (5, 6, 7)]
+                            if k % 8 != 0 and near1:
+                                g = min(near1, key=lambda p: abs(p - k))
+                            elif g8 != k and abs(g8 - k) <= snap and 0 < g8 < endbar - floor:
+                                g = g8
+                            else:
                                 g = k
                     snapped[g] = max(snapped.get(g, 0), sc)
                 cand = snapped

@@ -439,11 +439,23 @@ tracks (29% vs 18%), and a refit toward the batches lost on held-out hand tracks
 the model stays as fit. The recurring miss: the scorer picks a late Down where the
 DJ cues the last Chorus 33–40 out. Watch it; refit toward the batches at ~100 tracks.
 
-State of the loop on 2026-09-24 (evening): 377 local tracks left; 80 vetted and
-synced through Romain FX – Make Italo Disco Great Again. Batch 7 onward is a16
-(structural outro, phrase 1.6, detector on offsets 1/2/4 with strict targets, phrase
-magnet in 8-grid mode) and **batches are now 20 tracks**. Confirmed per batch: 85,
-65, 65, 60, 75, 72. Held-out library scorecard: original 62.3% → a16 67.4% exact.
+**The library is history; the recent hand is now (a17).** The DJ's own hand-cued
+tracks show the last cue moving from a median 25 bars out (2024) to 33 (late 2026);
+the batches say 33 with 6% inside 24 bars, the library says 30%. The batches also
+carry gaps over 48 bars on 4% of tracks against 12–14% in the library. So: where
+the library and the recent hand disagree AND the DJ's own hand shows a trend, the
+recent hand wins. `~/work/rb_b7rules.py` scores every variant on three columns —
+batches (all, non-auto), recent hand-only (2026 H2, `recent_hand.json`), library
+sample — and a change ships when batches and recent hand improve and the library
+does not seriously fall. The outro model v2 was refit that way
+(`rb_outro_refit2.py`, batches ×30, recent ×15, two-fold CV).
+
+State of the loop on 2026-09-25: 357 local tracks left; 100 vetted and synced
+through QuiQui – You Are Imagination. Batch 8 onward is a17 (outro v2, early
+markers → grid, detector 1/2/4 strict, magnet), 20 tracks per batch. Confirmed per
+batch: 85, 65, 65, 60, 75, 72, 79. Open: the last cue on the batches is still ~50%
+— the misses are choices between two boundaries 31–43 out; and gap-filling is the
+DJ's habit but no fill rule has scored positive yet.
 
 **`sound`** — waveform → per-track numbers. `-o FILE` `--limit N`
 
