@@ -480,7 +480,8 @@ the band cache is `bands_all.jsonl` (`rb_bands.py`, two calls of ~150 s).
 
 State of the loop on 2026-09-25: 357 local tracks left; 100 vetted and synced
 through QuiQui – You Are Imagination. Batch 8 (QuiQui Alex Swank → Pan-Pot Crank)
-was written with a17 and should be re-cued with a18 before review. 20 tracks per
+is written with a18 — the first energy-engine batch; its review is the first clean
+read on the new engine. `written_batch8_live.json` holds the energy version. 20 tracks per
 batch. Confirmed per batch: 85, 65, 65, 60, 75, 72, 79. Open: the last cue is a
 choice between two adjacent shifts about half the time; gap-filling is the DJ's
 habit but no fill rule has scored positive.

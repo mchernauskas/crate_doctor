@@ -35,7 +35,7 @@ that still has energy after it, with a soft preference for 32 bars out.
 | model | batches 1–7 | **DJ's own hand, no tool** | library |
 |---|---|---|---|
 | a17 (phrase engine) | 73.1% | 62.8% | 67.3% |
-| **a18 energy engine** | 63.5% | **65.5%** | 66.4% |
+| **a18 energy engine** | 65.3% | **66.0%** | 67.7% |
 | energy + phrase bonus 1.0 | 66.4% | 66.3% | 68.4% |
 
 The batch column favours the phrase engine and is circular: batches 1–7 are
@@ -53,9 +53,13 @@ the remaining last-cue misses are one 8- or 16-bar step from the DJ's — the ch
 between two adjacent shifts. The DJ's spread (median 33 out) and the engine's (32)
 now match. And gap-filling remains the one habit no rule has scored positive on.
 
-**Batch 8 was written with a17 before this landed.** Re-cue it with the energy engine
-before the DJ reviews it, so the review is evidence about the new engine and not the
-old one.
+**Two fixes found while re-cueing batch 8 with the engine.** Bar 0 was being
+downweighted on quiet intros and, on tracks with a big drop-in at bar 8, crowded
+out by spacing; the DJ cues 1.1 on essentially every track. Bar 0 is now placed
+first, like the last cue, before the fill. Recent hand 65.5 → 66.0, library 66.4 →
+67.7, batches 63.5 → 65.3. Batch 8 was re-cued with the energy engine before review
+(105 of 200 cues coincide with the phrase engine's version — the other 95 are where
+the two disagree, and the DJ's review of them is the first clean evidence).
 
 ## 0.9.0a17 — alpha
 

@@ -885,14 +885,19 @@ def place_energy(b3, endbar, target, minspace, floor, have=(), phrase_bars=(), p
             sc += phrase_bonus
         if sc > W['minsc']:
             cand[k] = sc
-    for k in (0, 32):
-        if 0 <= k < endbar - floor:
-            cand[k] = max(cand.get(k, 0), W['anchor'] if E[k:k + 4].mean() > 0.25 else W['anchor'] / 3)
+    # Bar 0 is cued on essentially every track the DJ has touched, quiet intro or
+    # not -- it is the downbeat, not a musical event. It goes in before the fill,
+    # like the last cue, so nothing can crowd it out. Bar 32 keeps the dead-patch
+    # check (81% occupancy, not 100%).
+    if 0 not in have and 0 < endbar - floor and not any(abs(h) < minspace for h in have):
+        picks.append(0)
+    if 32 < endbar - floor:
+        cand[32] = max(cand.get(32, 0), W['anchor'] if E[32:36].mean() > 0.25 else W['anchor'] / 3)
     # snap to the 8-grid within two bars: a shift a bar off the grid IS the grid bar
     snapped = {}
     for k, sc in cand.items():
         g = int(round(k / 8.0)) * 8
-        g = g if (g != k and abs(g - k) <= 2 and 0 < g < endbar - floor) else k
+        g = g if (g != k and abs(g - k) <= 2 and 0 <= g < endbar - floor) else k
         snapped[g] = max(snapped.get(g, 0), sc)
     ordered = sorted(snapped.items(), key=lambda x: -x[1])
     for need, gap in ((W['wide_need'], max(minspace, 16)), (W['tight_need'], minspace)):
