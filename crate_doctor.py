@@ -995,7 +995,11 @@ def fix_cues(a):
         # a track can also carry hand-set cues, and those count toward the target and
         # toward spacing even though they are never touched.
         ours = [c for c in allc if not a.tag or (c.Comment or '') == a.tag]
-        if not ours or not r.Length or not r.BPM:
+        if not r.Length or not r.BPM:
+            continue
+        if not ours and not getattr(a, 'fill', False):
+            # A track with no cue under --tag is not this run's to touch -- unless
+            # --fill says to top it up around whatever the DJ set by hand.
             continue
         bpm = r.BPM / 100.0
         # 1. cues with too little runway
@@ -1484,8 +1488,11 @@ def cmd_hotcues(a):
 
 # ---------------------------------------------------------------- grid
 
-GRID_BIAS_MS = 9.7      # where the low band's onset sits relative to a beat the DJ accepts (library median)
-GRID_OFF_MS = 15.0      # deviation from that, in ms, before a grid is called off
+GRID_BIAS_MS = 2.0      # where the low band's onset reads on a grid the DJ set BY HAND (Black Fusion +1.4,
+                        # This Is Not Love +1.2, Blacklight Sleaze +4.8). Rekordbox's own analysis sits
+                        # ~10 ms earlier than the onset on average, and he accepts that; a slide aims at
+                        # the onset, where his hand puts it.
+GRID_OFF_MS = 20.0      # deviation before a grid is called off: the size of error he fixes by hand
 GRID_DRIFT_MS = 15.0    # first-quarter vs last-quarter offset difference before the tempo is called wrong
 GRID_PHASE_CONF = 1.5   # downbeat vote margin before the downbeat is called suspect
 GRID_SR = 150.0         # the colour waveform's sample rate
@@ -1659,9 +1666,10 @@ def cmd_grid(a):
 
     Rekordbox's analysis gets the grid wrong in three ways this can see from the
     stored colour waveform (150 samples/s, no audio decoding):
-      OFFSET    the whole grid sits early or late against the kicks. The library's
-                accepted grids measure +9.7 ms (the low band's own lag); a grid is
-                flagged 15 ms either side of that, and --fix slides it back.
+      OFFSET    the whole grid sits early or late against the kicks. A grid the DJ
+                set by hand reads +2 ms here; Rekordbox's analysis averages +10 and
+                he lives with that. A grid is flagged 20 ms or more off (the size of
+                error he fixes by hand) and --fix slides it onto the kicks.
       DRIFT     the offset changes along the track: the tempo is off. --fix rebuilds
                 the grid at the corrected tempo from the first beat.
       DOWNBEAT  the big changes land on beat 2, 3 or 4: bar 1 is on the wrong beat.
@@ -1690,7 +1698,7 @@ def cmd_grid(a):
         rows = rows[:a.limit]
     print(f"\n{len(rows)} track{'s' if len(rows) != 1 else ''} in scope"
           f"{' (non-synced only)' if a.local else ''}, newest first.")
-    print(f"  offset: kicks vs grid, ms (accepted grids: +{GRID_BIAS_MS:.0f} ms +-{GRID_OFF_MS:.0f})   "
+    print(f"  offset: kicks vs grid, ms (hand-set grids read +{GRID_BIAS_MS:.0f}; flagged at +-{GRID_OFF_MS:.0f} from that)   "
           f"drift: first vs last quarter   downbeat: beat the big changes land on")
     print(f"\n  {'#':>3}  {'offset':>7} {'drift':>6}  {'downbeat':9} {'bpm':>7}  track")
     plans = []
@@ -4084,6 +4092,10 @@ def main():
     c.add_argument('--rebuild', action='store_true',
                    help='with --fix: delete the cues in scope and place them again from scratch, '
                         'instead of only topping up. Use after changing the placement rules.')
+    c.add_argument('--fill', action='store_true',
+                   help='with --fix --tag: also top up tracks in scope that carry no cue under the tag, '
+                        'placing around the hand-set cues (which are never touched). For a track the DJ '
+                        'gridded and started by hand.')
     c.add_argument('--target', type=int, default=0, help='with --fix: top each track back up to this many cues')
     c.add_argument('--min-space', type=int, default=8, help='minimum bars between cues (default 8)')
     c.add_argument('--anchor-bars', default='0,32',

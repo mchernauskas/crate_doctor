@@ -24,6 +24,17 @@ cross-correlates the low band's onsets with the grid's beat times:
   rotated by two beats 95% of the time — good enough to flag, not to fix unasked, so
   rotations need `--downbeat`.
 
+First live test, Black Fusion: the tool slid the grid +78 ms; the DJ then set it by
+hand 9 ms later still, exactly on the low-band onset — and on his other hand-set
+grids the onset reads +1 to +5 ms too. Rekordbox's own analysis averages +10 and he
+lives with that. So a slide now aims at the onset (+2), and a grid is flagged at
+20 ms off, the size of error he fixes by hand.
+
+`cues --fill`: with `--fix --tag`, also top up tracks in scope that carry no cue
+under the tag, placing around the hand-set cues. For a track the DJ gridded and
+started by hand — Black Fusion came back with 0, 24, 40 (the breakdown, where the
+engine had taken the kick's return at 48).
+
 The write patches the PQTZ tag in the `.DAT` and the PQT2 anchors in the `.EXT` byte
 for byte (nothing else in either file changes), backs both up first under
 `crate_doctor_backups/anlz/<stamp>/<track id>/`, bumps `AnalysisUpdated` the way

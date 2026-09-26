@@ -510,8 +510,10 @@ grids."* `grid` audits offset / drift / downbeat from the stored waveform and
 `grid --fix` rewrites the beat grid in the analysis files (see the CHANGELOG for
 the numbers). Order of work on a batch from now on: `grid --local --newest N --fix`
 first, then `cues --fix --rebuild`, so the cues are judged on a corrected grid. The
-offset fix is trusted (calibrated on his accepted grids); the downbeat vote is a
-flag for him to check, applied only with `--downbeat`. Precision is a few ms; a
+offset fix aims at the low-band onset (+2 ms: where his hand puts a grid; Rekordbox's
+analysis averages +10) and fires at 20 ms off; the downbeat vote is a flag for him
+to check, applied only with `--downbeat`. When he re-grids a track and starts its
+cues by hand, `cues --fix --fill --tag ... --newest N` tops it up around his cues. Precision is a few ms; a
 grid that is already close is left alone. Prototype and calibration:
 `~/work/rb_grid.py`, `rb_gridcheck.py`.
 
