@@ -504,6 +504,17 @@ the beat and the DJ reads that as the tool's error. Check for it before diffing
 is the deeper case: the analysed grid had the downbeat two beats off, so the bands
 were computed on a wrong grid and the kick-in was smeared across two bars.
 
+**Grids are the tool's job too (a20).** The DJ: *"this tool is also supposed to
+check grids and set accurate grids ... you are supposed to accurately set cues AND
+grids."* `grid` audits offset / drift / downbeat from the stored waveform and
+`grid --fix` rewrites the beat grid in the analysis files (see the CHANGELOG for
+the numbers). Order of work on a batch from now on: `grid --local --newest N --fix`
+first, then `cues --fix --rebuild`, so the cues are judged on a corrected grid. The
+offset fix is trusted (calibrated on his accepted grids); the downbeat vote is a
+flag for him to check, applied only with `--downbeat`. Precision is a few ms; a
+grid that is already close is left alone. Prototype and calibration:
+`~/work/rb_grid.py`, `rb_gridcheck.py`.
+
 State of the loop on 2026-09-26: 337 local tracks left; 120 vetted and synced
 through Pan-Pot – Crank. Batch 8 (first energy batch, a18): 120/200 confirmed, 56
 moved, 24 deleted, 23 added; last cue exact 9/20, his last cues median 32 out. Batch

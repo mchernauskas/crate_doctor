@@ -1482,6 +1482,325 @@ def cmd_hotcues(a):
               f"and the write. Re-run the dry run and look.")
 
 
+# ---------------------------------------------------------------- grid
+
+GRID_BIAS_MS = 9.7      # where the low band's onset sits relative to a beat the DJ accepts (library median)
+GRID_OFF_MS = 15.0      # deviation from that, in ms, before a grid is called off
+GRID_DRIFT_MS = 15.0    # first-quarter vs last-quarter offset difference before the tempo is called wrong
+GRID_PHASE_CONF = 1.5   # downbeat vote margin before the downbeat is called suspect
+GRID_SR = 150.0         # the colour waveform's sample rate
+
+
+def pwv7_bands(ex2):
+    """The colour waveform as (samples x 3) floats: lows, mids, highs at 150/s."""
+    raw = ex2.get_tag('PWV7').content.entries
+    a = np.frombuffer(bytes(raw), dtype=np.uint8)
+    return a[:len(a) // 3 * 3].reshape(-1, 3).astype(float)
+
+
+def grid_offset(onset, tb, sel=None, maxlag=15):
+    """Where the kicks sit relative to the grid, in ms (positive = after the beat).
+
+    Cross-correlates the low band's onsets with a comb at the grid's beat times over
+    lags of +-100 ms, then interpolates the peak. Also returns how sharp that peak
+    is against the median lag -- below ~5 there is no clear kick to measure against.
+    """
+    idx = (tb / 1000.0 * GRID_SR).astype(int)
+    if sel is not None:
+        idx = idx[sel]
+    lags = np.arange(-maxlag, maxlag + 1)
+    sc = []
+    for L in lags:
+        ii = idx + L
+        ii = ii[(ii >= 1) & (ii < len(onset) - 1)]
+        sc.append(onset[ii].sum() + 0.5 * (onset[ii - 1].sum() + onset[ii + 1].sum()))
+    sc = np.array(sc)
+    b = int(np.argmax(sc))
+    frac = 0.0
+    if 0 < b < len(lags) - 1:
+        y0, y1, y2 = sc[b - 1], sc[b], sc[b + 1]
+        den = y0 - 2 * y1 + y2
+        frac = 0.5 * (y0 - y2) / den if den != 0 else 0.0
+    return (lags[b] + frac) / GRID_SR * 1000.0, float(sc[b] / (np.median(sc) + 1e-6))
+
+
+def grid_downbeat(a, tb, beats, top=12):
+    """Which beat of the bar the big changes land on. Returns (phase 0-3, margin).
+
+    Kick-ins, drops and breakdowns start on a downbeat. The twelve largest bar-scale
+    energy changes in the track vote by their beat number; phase 0 means the grid's
+    beat 1 is the downbeat. Measured on 200 of the DJ's own grids: with a margin of
+    1.5 the vote decides 57% of tracks, is wrong on 5% of them, and finds a grid that
+    was rotated by two beats 95% of the time. Good enough to flag, not to fix unasked.
+    """
+    E = []
+    for i in range(len(tb) - 1):
+        s0, s1 = int(tb[i] / 1000.0 * GRID_SR), int(tb[i + 1] / 1000.0 * GRID_SR)
+        E.append(a[s0:s1].mean(0) if s1 > s0 else np.zeros(3))
+    E = np.array(E)
+    if len(E) < 16:
+        return 0, 0.0
+    E = E / (np.percentile(E, 90, axis=0) + 1e-6)
+    ch = np.zeros(len(E))
+    for i in range(4, len(E) - 4):
+        ch[i] = np.abs(E[i:i + 4].mean(0) - E[i - 4:i].mean(0)).sum()
+    votes = np.zeros(4)
+    for i in np.argsort(-ch)[:top]:
+        votes[(beats[i] - 1) % 4] += ch[i]
+    best = int(np.argmax(votes))
+    srt = np.sort(votes)
+    return best, float(votes[best] / (srt[-2] + 1e-9))
+
+
+def grid_audit(dat, ex2):
+    """One track's grid against its own waveform. Returns a dict or None."""
+    ents = dat.get_tag('PQTZ').content.entries
+    if len(ents) < 64:
+        return None
+    tb = np.array([e.time for e in ents], float)
+    beats = np.array([e.beat for e in ents])
+    tempos = [e.tempo for e in ents]
+    a = pwv7_bands(ex2)
+    low = a[:, 0]
+    onset = np.clip(np.diff(low, prepend=low[0]), 0, None)
+    off, sharp = grid_offset(onset, tb)
+    n = len(tb)
+    q = n // 4
+    off1, _ = grid_offset(onset, tb, sel=slice(0, q))
+    off2, _ = grid_offset(onset, tb, sel=slice(n - q, n))
+    span_ms = float(tb[n - q // 2] - tb[q // 2])
+    phase, conf = grid_downbeat(a, tb, beats)
+    return dict(off=off, dev=off - GRID_BIAS_MS, sharp=sharp, drift=off2 - off1, span_ms=span_ms,
+                phase=phase, conf=conf, tempos=len(set(tempos)), tempo=tempos[0], first_beat=int(beats[0]),
+                n=n, t0=float(tb[0]), t_last=float(tb[-1]))
+
+
+def grid_plan(x, want_downbeat=False):
+    """Turn an audit into flags and a fix: (flags, shift_ms, new_tempo, rotate)."""
+    flags, shift, tempo, rot = [], 0.0, None, 0
+    if x['sharp'] < 5:
+        return ['no clear kicks'], 0.0, None, 0
+    if abs(x['dev']) >= GRID_OFF_MS:
+        flags.append(f"OFFSET {x['dev']:+.0f}ms")
+        shift = x['dev']
+    if abs(x['drift']) >= GRID_DRIFT_MS and x['tempos'] == 1 and x['sharp'] >= 8:
+        # the grid gains `drift` ms on the kicks over `span`: it is that much too fast
+        bpm = x['tempo'] / 100.0
+        new = round(bpm / (1.0 + x['drift'] / x['span_ms']), 2)
+        flags.append(f"DRIFT {x['drift']:+.0f}ms ({bpm:.2f} -> {new:.2f} BPM)")
+        tempo = int(round(new * 100))
+    if x['phase'] != 0 and x['conf'] >= GRID_PHASE_CONF:
+        flags.append(f"DOWNBEAT? beat {x['phase'] + 1} (x{x['conf']:.1f})")
+        if want_downbeat:
+            rot = x['phase']
+    return flags, shift, tempo, rot
+
+
+def patch_grid_files(paths, shift_ms, new_tempo, rot, backup_dir):
+    """Rewrite the beat grid in the .DAT (PQTZ) and .EXT (PQT2) analysis files.
+
+    Byte-level patch: every other tag stays identical. PQTZ holds one 8-byte entry
+    per beat (beat, tempo x100, time ms); PQT2 in the .EXT repeats the first and
+    last beat as anchors. Backups of both files go to backup_dir first.
+    Returns the new (first time, last time).
+    """
+    import struct
+    dat_p, ext_p = paths['DAT'], paths['EXT']
+    os.makedirs(backup_dir, exist_ok=True)
+    for p in (dat_p, ext_p):
+        shutil.copy2(p, os.path.join(backup_dir, os.path.basename(p)))
+    d = bytearray(open(dat_p, 'rb').read())
+    i = d.find(b'PQTZ')
+    if i < 0:
+        raise RuntimeError('no PQTZ in ' + dat_p)
+    lh, lt = struct.unpack('>II', d[i + 4:i + 12])
+    count = struct.unpack('>I', d[i + 20:i + 24])[0]
+    if lt - lh != count * 8:
+        raise RuntimeError(f'PQTZ layout unexpected in {dat_p} ({lt - lh} bytes for {count} beats)')
+    first_t = last_t = None
+    base_t = None
+    for k in range(count):
+        o = i + lh + k * 8
+        beat, tempo, t = struct.unpack('>HHI', d[o:o + 8])
+        if new_tempo:
+            if base_t is None:
+                base_t = t + shift_ms
+            t = base_t + k * (6000000.0 / new_tempo)
+            tempo = new_tempo
+        else:
+            t = t + shift_ms
+        if rot:
+            beat = ((beat - 1 - rot) % 4) + 1
+        t = int(round(t))
+        if first_t is None:
+            first_t = t
+        last_t = t
+        d[o:o + 8] = struct.pack('>HHI', beat, tempo, max(0, t))
+    e = bytearray(open(ext_p, 'rb').read())
+    j = e.find(b'PQT2')
+    if j >= 0:
+        # header: u0 u1 pad | beat tempo time | beat tempo time | count u3 u4 u5
+        h = j + 12 + 12
+        b1, t1, tt1, b2, t2, tt2 = struct.unpack('>HHIHHI', e[h:h + 16])
+        if rot:
+            b1 = ((b1 - 1 - rot) % 4) + 1
+            b2 = ((b2 - 1 - rot) % 4) + 1
+        if new_tempo:
+            t1 = t2 = new_tempo
+        e[h:h + 16] = struct.pack('>HHIHHI', b1, t1, first_t, b2, t2, last_t)
+    open(dat_p, 'wb').write(bytes(d))
+    if j >= 0:
+        open(ext_p, 'wb').write(bytes(e))
+    return first_t, last_t
+
+
+def cmd_grid(a):
+    """Check every beat grid against the track's own waveform; --fix repairs it.
+
+    Rekordbox's analysis gets the grid wrong in three ways this can see from the
+    stored colour waveform (150 samples/s, no audio decoding):
+      OFFSET    the whole grid sits early or late against the kicks. The library's
+                accepted grids measure +9.7 ms (the low band's own lag); a grid is
+                flagged 15 ms either side of that, and --fix slides it back.
+      DRIFT     the offset changes along the track: the tempo is off. --fix rebuilds
+                the grid at the corrected tempo from the first beat.
+      DOWNBEAT  the big changes land on beat 2, 3 or 4: bar 1 is on the wrong beat.
+                Flagged only; --downbeat rotates the beat numbers, because the vote
+                is wrong on about one track in twenty and that is too many to do
+                unasked. Check the flagged tracks in Rekordbox and pass --downbeat
+                for the ones that need it (narrow with --newest / --limit).
+    Precision from the waveform is a few ms; that is enough to catch the gross
+    errors that Rekordbox makes, not to fine-tune a grid that is already close.
+
+    Writing changes the analysis files, not just the database: both are backed up
+    first (crate_doctor_backups/anlz/<stamp>/<track id>/). Cues the tool set move
+    with the grid; hand-set cues move only with --move-hand-cues. After a grid fix,
+    re-run `cues --fix --rebuild` on those tracks so the cues are judged on the
+    corrected bars.
+    """
+    path = db_paths(a.db)
+    dbro = open_ro(path)
+    rows = list(real_tracks(dbro))
+    if a.local:
+        rows = [r for r in rows if path_bucket(r.FolderPath or '') is not None]
+    rows = by_date_added(rows)
+    if a.newest:
+        rows = rows[:a.newest]
+    if a.limit:
+        rows = rows[:a.limit]
+    print(f"\n{len(rows)} track{'s' if len(rows) != 1 else ''} in scope"
+          f"{' (non-synced only)' if a.local else ''}, newest first.")
+    print(f"  offset: kicks vs grid, ms (accepted grids: +{GRID_BIAS_MS:.0f} ms +-{GRID_OFF_MS:.0f})   "
+          f"drift: first vs last quarter   downbeat: beat the big changes land on")
+    print(f"\n  {'#':>3}  {'offset':>7} {'drift':>6}  {'downbeat':9} {'bpm':>7}  track")
+    plans = []
+    flagged = 0
+    prog = Progress(len(rows), 'checking grids', 'tracks')
+    for k, r in enumerate(rows, 1):
+        prog.step()
+        try:
+            dat, ext, ex2 = anlz(dbro, r)
+            if dat is None or ex2 is None:
+                continue
+            x = grid_audit(dat, ex2)
+        except Exception as e:
+            print(f"  {k:3d}  {'?':>7} {'':6}  {'':9} {'':>7}  {track_label(dbro, r)}   (unreadable: {e})")
+            continue
+        if x is None:
+            continue
+        flags, shift, tempo, rot = grid_plan(x, want_downbeat=a.downbeat)
+        db_txt = f"beat {x['phase'] + 1} x{x['conf']:.1f}" if x['phase'] else f"ok x{x['conf']:.1f}"
+        mark = '  <-- ' + ', '.join(flags) if flags and flags != ['no clear kicks'] else ('  (no clear kicks)' if flags else '')
+        if a.only_flagged and not mark.startswith('  <--'):
+            continue
+        print(f"  {k:3d}  {x['off']:+6.1f}  {x['drift']:+5.1f}  {db_txt:9} {x['tempo'] / 100:7.2f}  {track_label(dbro, r)}{mark}")
+        if mark.startswith('  <--'):
+            flagged += 1
+        if a.fix and (shift or tempo or rot):
+            plans.append((r, x, flags, shift, tempo, rot))
+    print(f"\n  {flagged} of {len(rows)} grids flagged.")
+    if not a.fix:
+        if flagged:
+            print("  add --fix to see what would change (offset and drift); --downbeat to include beat rotations.")
+        return
+    if not plans:
+        print("  nothing to fix.")
+        return
+    print(f"\n  --fix would change {len(plans)} grid{'s' if len(plans) != 1 else ''}:")
+    for r, x, flags, shift, tempo, rot in plans:
+        what = []
+        if shift:
+            what.append(f"slide {shift:+.0f} ms")
+        if tempo:
+            what.append(f"tempo {x['tempo'] / 100:.2f} -> {tempo / 100:.2f}")
+        if rot:
+            what.append(f"downbeat -> beat {rot + 1}")
+        print(f"     {track_label(dbro, r)}: {'; '.join(what)}")
+    if not a.write:
+        print("\n  dry run — nothing written. add --write to apply.")
+        return
+    procs = rekordbox_processes()
+    if procs:
+        sys.exit(f"REFUSING to write: {', '.join(procs)} is running. Quit Rekordbox fully and try again.")
+    stamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+    bdir = os.path.join(os.path.dirname(backup(path, 'before_gridfix')[0]), 'anlz', stamp)
+    print(f"\n  backup: database and analysis files under {bdir}")
+    now = datetime.datetime.now()
+    done = []
+    # Database first (SafeWrite verifies and swaps it in), analysis files second: a
+    # failure in the files can be undone from their backups, and the database is
+    # never left pointing at half-written files.
+    with SafeWrite(path) as db:
+        live = {str(r.ID): r for r in db.query(tables.DjmdContent).all()}
+        cues = collections.defaultdict(list)
+        for c in db.query(tables.DjmdCue).all():
+            if not c.rb_local_deleted:
+                cues[str(c.ContentID)].append(c)
+        for r, x, flags, shift, tempo, rot in plans:
+            lr = live[str(r.ID)]
+            try:
+                lr.AnalysisUpdated = str(int(lr.AnalysisUpdated or 0) + 1)
+            except (TypeError, ValueError):
+                pass
+            lr.updated_at = now
+            if tempo:
+                lr.BPM = tempo
+            first_t = x['t0'] + shift
+            moved = 0
+            for c in cues.get(str(r.ID), []):
+                ours = (c.Comment or '').startswith('CUE(')
+                if not ours and not a.move_hand_cues:
+                    continue
+                ms = c.InMsec or 0
+                if tempo:
+                    # keep the cue on the same beat index of the rebuilt grid
+                    k = round((ms - x['t0']) / (6000000.0 / x['tempo']))
+                    ms = first_t + k * (6000000.0 / tempo)
+                else:
+                    ms = ms + shift
+                c.InMsec = int(round(ms))
+                c.InFrame = int(c.InMsec * 0.15)
+                c.updated_at = now
+                moved += 1
+            done.append((r, moved))
+    for r, moved in done:
+        x, flags, shift, tempo, rot = next(p[1:] for p in plans if p[0] is r)
+        paths = dbro.get_anlz_paths(r)
+        bk = os.path.join(bdir, str(r.ID))
+        try:
+            patch_grid_files(paths, shift, tempo, rot, bk)
+        except Exception as e:
+            for key in ('DAT', 'EXT'):
+                b = os.path.join(bk, os.path.basename(paths[key]))
+                if os.path.exists(b):
+                    shutil.copy2(b, paths[key])
+            sys.exit(f"  FAILED patching the analysis files for {track_label(dbro, r)}: {e}\n"
+                     f"  Those files were restored from {bk}. The database already carries the moved cues\n"
+                     f"  for this track; restore it from the backup above if you want them back.")
+        print(f"     fixed {track_label(dbro, r)}   ({moved} cue{'s' if moved != 1 else ''} moved with it)")
+    print("\n  Re-run `cues --fix --rebuild` on these tracks so the cues are judged on the corrected grid.")
+
+
 def track_label(db, r):
     art = ''
     try:
@@ -3802,6 +4121,17 @@ def main():
     c.add_argument('--limit', type=int, default=25, help='how many tracks to list in the dry run (default 25)')
     c.add_argument('--write', action='store_true', help='with --clear: actually apply the changes')
     c.set_defaults(func=cmd_hotcues)
+
+    c = sub.add_parser('grid', help="check beat grids against the waveform; --fix repairs offset and tempo")
+    c.add_argument('--local', action='store_true', help='only tracks whose file is a real path on this machine')
+    c.add_argument('--newest', type=int, default=0, metavar='N', help='only the N most recently added tracks in scope')
+    c.add_argument('--limit', type=int, default=0, metavar='N', help='stop after N tracks')
+    c.add_argument('--only-flagged', action='store_true', help='print only grids with a problem')
+    c.add_argument('--fix', action='store_true', help='plan repairs for OFFSET and DRIFT (dry run without --write)')
+    c.add_argument('--downbeat', action='store_true', help='with --fix: also rotate beat numbers on DOWNBEAT? tracks')
+    c.add_argument('--move-hand-cues', action='store_true', help='with --fix: move hand-set cues with the grid too (default: only the tool\'s)')
+    c.add_argument('--write', action='store_true', help='with --fix: actually apply the changes')
+    c.set_defaults(func=cmd_grid)
 
     c = sub.add_parser('sound', help="per-track sound numbers, decoded from the stored waveform")
     c.add_argument('-o', '--out', help='write JSONL here instead of stdout')

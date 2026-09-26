@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.9.0a20 — alpha
+
+### `grid`: check every beat grid against the track's own waveform, and fix it
+
+The DJ: *"this tool is also supposed to check grids and set accurate grids, not just
+let the analysis set it. You are supposed to accurately set cues AND grids."* Every
+cue engine so far took Rekordbox's grid as given. Blacklight Sleaze showed what that
+costs: the analysed grid had the downbeat two beats off, so every bar the engine
+scored was half a bar of the wrong music.
+
+`grid` reads the stored colour waveform (150 samples/s, no audio decoding) and
+cross-correlates the low band's onsets with the grid's beat times:
+
+- **OFFSET** — the grid sits early or late against the kicks. On 228 of the DJ's
+  accepted grids the kicks measure +9.7 ms after the beat (the low band's own lag),
+  95% within 25 ms; a grid is flagged 15 ms either side of that and `--fix` slides it.
+  Batch 9 had two: Pan-Pot's Black Fusion (+88 ms) and Apocalyptic Horseman (+81 ms).
+- **DRIFT** — the offset changes along the track: the tempo is off. `--fix` rebuilds
+  the grid at the corrected tempo from the first beat and updates the BPM.
+- **DOWNBEAT?** — the twelve biggest bar-scale changes vote on the beat they land on.
+  With a 1.5 margin the vote decides 57% of tracks, is wrong on 5%, and catches a grid
+  rotated by two beats 95% of the time — good enough to flag, not to fix unasked, so
+  rotations need `--downbeat`.
+
+The write patches the PQTZ tag in the `.DAT` and the PQT2 anchors in the `.EXT` byte
+for byte (nothing else in either file changes), backs both up first under
+`crate_doctor_backups/anlz/<stamp>/<track id>/`, bumps `AnalysisUpdated` the way
+Rekordbox does, and moves the tool's cues with the grid (hand cues only with
+`--move-hand-cues`). Verified on a scratch copy: only grid bytes differ, the files
+parse, the cues land on the new downbeats, and the re-audit reads +8 ms.
+
 ## 0.9.0a19 — alpha
 
 ### A combination: the phrase grid as a tie-breaker, and the kick-in sets that grid
