@@ -469,22 +469,46 @@ does not seriously fall. The outro model v2 was refit that way
 (`rb_outro_refit2.py`, batches ×30, recent ×15, two-fold CV).
 
 **The engine changed on 2026-09-25 (a18).** `place_energy()` — waveform bands plus
-the beat grid, no Rekordbox phrase data — is the default. The phrase engine (a7–a17)
-is behind `--engine phrase`. On the only clean test (85 tracks the DJ cued by hand,
-no tool involved) the energy engine scores 65.5% against the phrase engine's 62.8%.
-The batches favour the phrase engine because they were seeded with it; treat batch
-results from batch 9 on (energy-seeded) as the real read. `--phrase-bonus 1.0`
-adds ~1 point everywhere and is off by default at the DJ's request. The three
-scoring columns (batches / recent hand / library) are in `~/work/rb_energy_model.py`;
-the band cache is `bands_all.jsonl` (`rb_bands.py`, two calls of ~150 s).
+the beat grid — is the default. The phrase engine (a7–a17) is behind `--engine
+phrase`. On the only clean test (85 tracks the DJ cued by hand, no tool involved)
+the energy engine scores 66.0% against the phrase engine's 62.8%. The three scoring
+columns (batches / recent hand / library) are in `~/work/rb_energy_model.py`; the
+band cache is `bands_all.jsonl` (`rb_bands.py`, two calls of ~150 s).
 
-State of the loop on 2026-09-25: 357 local tracks left; 100 vetted and synced
-through QuiQui – You Are Imagination. Batch 8 (QuiQui Alex Swank → Pan-Pot Crank)
-is written with a18 — the first energy-engine batch; its review is the first clean
-read on the new engine. `written_batch8_live.json` holds the energy version. 20 tracks per
-batch. Confirmed per batch: 85, 65, 65, 60, 75, 72, 79. Open: the last cue is a
-choice between two adjacent shifts about half the time; gap-filling is the DJ's
-habit but no fill rule has scored positive.
+**It is a combination (a19).** The DJ, asked whether the energy engine should ignore
+phrasing: *"shouldn't it be a combination? I don't want you to overcorrect and take
+things I said too literally."* Batch 8 agreed: 152 of his 200 final cues sit on a
+Rekordbox phrase boundary. `--phrase-bonus` defaults to 1.0 — the energy score
+judges, the bonus breaks ties toward the phrase grid — and lifts every column (+3.3
+batches, +1.7 recent hand, +2.5 library).
+
+**The kick-in sets the phrase grid (a19).** Batch 8's two zeros (Blacklight Sleaze,
+Planet Gold, 0/10 each) had the DJ's cues at 7, 23, 39, 55 ...: seven beatless bars,
+kick on bar 7, and he counts phrases from the kick-in, not from bar 0. The library
+agrees 2:1 (94 tracks with an off-grid kick-in in the first 48 bars: cues follow the
+kick-in's grid on 53, bar 0's on 25). `place_energy()` now finds the first big
+low-end entry (one-bar jump ≥ 0.3 over a quiet run), cues it, never snaps it, and
+when it is off the 8-grid counts the tiers, the bar-32 anchor and the snap from it;
+in the first 15 bars it replaces bar 0 as the opening cue (bar 0 cued on a third of
+those tracks, the kick-in on 71%). Scored 69.1 / 69.5 / 71.3 against the hybrid's
+67.6 / 67.7 / 70.2. Two things that did NOT work: an energy-based mod-16 phase
+detector over the whole track (−4 everywhere) and refining the kick bar to the
+onset (−1). Tension is the known loss: kick on bar 1, DJ counts from 0.
+
+**Grids move under the cues.** The DJ re-grids tracks during review (batch 8: This
+Is Not Love shifted 22 ms, Blacklight Sleaze two beats, four others 2–6 ms; batch 7:
+none). The tool places cues exactly on the grid in the .DAT at write time and never
+touches grids; a cue does not follow a grid that moves later, so it then sits off
+the beat and the DJ reads that as the tool's error. Check for it before diffing
+(`rb_grid_probe2.py`: old cues vs current downbeats) and say so plainly. Blacklight
+is the deeper case: the analysed grid had the downbeat two beats off, so the bands
+were computed on a wrong grid and the kick-in was smeared across two bars.
+
+State of the loop on 2026-09-26: 337 local tracks left; 120 vetted and synced
+through Pan-Pot – Crank. Batch 8 (first energy batch, a18): 120/200 confirmed, 56
+moved, 24 deleted, 23 added; last cue exact 9/20, his last cues median 32 out. Batch
+9 is written with a19. Confirmed per batch: 85, 65, 65, 60, 75, 72, 79, 120/200.
+Open: the last cue is a choice between two adjacent shifts about half the time.
 
 **`sound`** — waveform → per-track numbers. `-o FILE` `--limit N`
 

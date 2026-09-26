@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.9.0a19 — alpha
+
+### A combination: the phrase grid as a tie-breaker, and the kick-in sets that grid
+
+Batch 8 was the first batch cued by the energy engine. The DJ kept 120 of 200 cues,
+moved 56, deleted 24, added 23; 152 of his 200 final cues sit on a Rekordbox phrase
+boundary. Asked whether the engine should ignore phrasing as a18 did, he said:
+*"shouldn't it be a combination? I don't want you to overcorrect and take things I
+said too literally."* Both changes below are that combination.
+
+**`--phrase-bonus` defaults to 1.0.** The energy score still judges; the bonus breaks
+ties toward the phrase grid, where the DJ puts three cues in four.
+
+**The kick-in sets the phrase grid.** The batch's two zeros — Blacklight Sleaze and
+Planet Gold, 0/10 each — had the DJ's cues at 7, 23, 39, 55, 71 ... Seven beatless
+bars, the kick lands on bar 7, and he counts phrases from the kick-in, not from bar
+0. The engine had snapped the kick-in to bar 8 and filled 32, 48, 64 from bar 0. The
+library agrees with him 2:1 (94 tracks with an off-grid kick-in in the first 48
+bars: his cues follow the kick-in's grid on 53, bar 0's on 25). `place_energy()` now
+finds the first big low-end entry (a one-bar jump of 0.3 or more over a quiet run),
+cues it, never snaps it, and when it is off the 8-grid counts the 8/16/32 tiers, the
+bar-32 anchor and the snap from it. Within the first 15 bars it also replaces bar 0
+as the opening cue: on those tracks the DJ cues bar 0 a third of the time and the
+kick-in 71%.
+
+| model | batches 1–8 (103) | DJ's own hand, no tool (85) | library (900) |
+|---|---|---|---|
+| a18 energy engine | 64.3% | 66.0% | 67.7% |
+| + phrase bonus 1.0 | 67.6% | 67.7% | 70.2% |
+| **a19: + kick-in grid** | **69.1%** | **69.5%** | **71.3%** |
+
+Real `fix_cues` on a 300-track scratch sample: 69.6% exact, 76.0% within two bars.
+Tried and dropped: an energy-based mod-16 phase detector over the whole track (−4
+points everywhere), refining the kick bar to the onset (−1), a marker-based phase
+from Rekordbox's phrases (mixed). Known loss: Tension — kick on bar 1, DJ counts
+from 0.
+
+**Grids move under the cues.** The DJ re-grids tracks while reviewing (This Is Not
+Love shifted 22 ms, Blacklight Sleaze two beats). The tool places cues exactly on
+the grid in the analysis file at write time and never touches grids; a cue does not
+follow a grid that moves afterwards, so it then sits off the beat. On Blacklight
+Sleaze the analysed grid had the downbeat two beats off, so the band energy was
+computed on a wrong grid and the kick-in was smeared across two bars — the cues
+could not have been right until the grid was.
+
 ## 0.9.0a18 — alpha
 
 ### The energy engine: cues at major energy shifts, judged from the waveform and the grid

@@ -814,12 +814,13 @@ ENERGY_W = dict(
     t32=1.2, t16=0.9, t8=0.3, # the grid, as a bonus on top of the music
     anchor=3.0,               # bars 0 and 32: cued on 94% / 81% of tracks
     minsc=0.15, wide_need=0.0, tight_need=1.2,
+    kick_thr=0.3, kick_pre=0.7, kick_lim=48, kick_first_lim=15,  # the kick-in sets the phrase grid (a19)
     # the last cue: biggest shift with energy left, near 32 bars out
     lo=48, hi=16, emin=0.55, near32=1.0, center=32, sig=8, g8=0.3, g16=0.2, eafter=0.5,
 )
 
 
-def place_energy(b3, endbar, target, minspace, floor, have=(), phrase_bars=(), phrase_bonus=0.0, W=ENERGY_W):
+def place_energy(b3, endbar, target, minspace, floor, have=(), phrase_bars=(), phrase_bonus=1.0, W=ENERGY_W):
     """Place cues at major energy shifts, judged from the waveform and the beat grid.
 
     This is the DJ's own description of what they do, and it replaced the phrase-
@@ -837,10 +838,13 @@ def place_energy(b3, endbar, target, minspace, floor, have=(), phrase_bars=(), p
 
     Scored against 85 tracks the DJ cued by hand in late 2026 with no tool involved:
     65.5% of picks exactly on the DJ's bar, against 62.8% for the phrase engine.
-    Adding Rekordbox's phrase boundaries as a small bonus (phrase_bonus ~1.0) lifts
-    that to 66.3% and the library to 68.4%; it is off by default because the DJ
-    asked for the assessment to be the tool's own, and it is here because the
-    number is worth knowing.
+    Adding Rekordbox's phrase boundaries as a small bonus (phrase_bonus 1.0, the
+    default since a19) lifts every column: batches 64.3 -> 67.6, recent hand
+    66.0 -> 67.7, library 67.7 -> 70.2. The energy score is still the judge; the
+    bonus only breaks ties toward the phrase grid. Batch 8 showed why: 152 of the
+    DJ's 200 final cues sat on a phrase boundary, and the six worst tracks were
+    ones whose phrase grid does not start at bar 0 (bar 7, +2, +3), where an
+    energy-only engine has no way to know which 8-grid he is counting on.
 
     Returns sorted bar indices. `have` are bars already cued (hand-set, under --tag)
     that the picks must respect for spacing and count.
@@ -853,6 +857,23 @@ def place_energy(b3, endbar, target, minspace, floor, have=(), phrase_bars=(), p
     E = tot / (np.percentile(tot, 90) + 1e-6)
     mag = np.abs(S) @ np.array([W['wl'], W['wm'], W['wh']]) + W['kickin'] * np.clip(S[:, 0], 0, None)
     ph = set(phrase_bars) if phrase_bonus else set()
+    # ---- the kick-in sets the phrase grid (a19)
+    # Batch 8, Blacklight Sleaze: seven beatless bars, the kick lands on bar 7, and
+    # the DJ's cues run 7, 23, 39, 55 ... -- he counts phrases from the kick-in, not
+    # from bar 0. The library agrees 2:1 (94 tracks with an off-grid kick-in in the
+    # first 48 bars: his cues follow the kick-in's grid on 53, bar 0's on 25). So:
+    # the first big low-end entry (one-bar jump >= kick_thr over a quiet run) is
+    # cued, never snapped, and if it is off the 8-grid the tiers, the bar-32 anchor
+    # and the snap all count from it. Within the first 15 bars it also replaces bar
+    # 0 as the opening cue (bar 0 is cued on a third of those tracks, the kick-in
+    # on 71%). Scored: +1.5 batches, +1.8 recent hand, +1.1 library.
+    kick, ph_off = None, 0
+    lim = min(int(W['kick_lim']), endbar - int(floor))
+    d1 = np.array([b3[k, 0] - b3[k - 1, 0] if k > 0 else 0.0 for k in range(n)])
+    ks = [k for k in range(1, lim) if d1[k] >= W['kick_thr'] and b3[max(0, k - 4):k, 0].mean() < W['kick_pre']]
+    if ks:
+        kick = max(ks, key=lambda k: d1[k])
+        ph_off = kick % 8
     picks = []
     # ---- the last cue
     if not any(16 <= endbar - h <= 48 for h in have):
@@ -875,11 +896,12 @@ def place_energy(b3, endbar, target, minspace, floor, have=(), phrase_bars=(), p
     cand = {}
     for k in range(1, endbar - int(floor)):
         sc = W['mag'] * mag[k]
-        if k % 32 == 0:
+        kk = k - ph_off
+        if kk % 32 == 0:
             sc += W['t32']
-        elif k % 16 == 0:
+        elif kk % 16 == 0:
             sc += W['t16']
-        elif k % 8 == 0:
+        elif kk % 8 == 0:
             sc += W['t8']
         if k in ph:
             sc += phrase_bonus
@@ -889,15 +911,22 @@ def place_energy(b3, endbar, target, minspace, floor, have=(), phrase_bars=(), p
     # not -- it is the downbeat, not a musical event. It goes in before the fill,
     # like the last cue, so nothing can crowd it out. Bar 32 keeps the dead-patch
     # check (81% occupancy, not 100%).
-    if 0 not in have and 0 < endbar - floor and not any(abs(h) < minspace for h in have):
+    if kick is not None and ph_off and kick <= W['kick_first_lim'] and kick not in have \
+            and not any(abs(kick - h) < minspace for h in have):
+        picks.append(kick)
+    elif 0 not in have and 0 < endbar - floor and not any(abs(h) < minspace for h in have):
         picks.append(0)
-    if 32 < endbar - floor:
-        cand[32] = max(cand.get(32, 0), W['anchor'] if E[32:36].mean() > 0.25 else W['anchor'] / 3)
-    # snap to the 8-grid within two bars: a shift a bar off the grid IS the grid bar
+    if kick is not None and kick < endbar - floor:
+        cand[kick] = max(cand.get(kick, 0), W['anchor'])
+    a32 = 32 + ph_off
+    if a32 < endbar - floor:
+        cand[a32] = max(cand.get(a32, 0), W['anchor'] if E[a32:a32 + 4].mean() > 0.25 else W['anchor'] / 3)
+    # snap to the 8-grid within two bars: a shift a bar off the grid IS the grid bar.
+    # The grid is the kick-in's when there is one; the kick-in itself never moves.
     snapped = {}
     for k, sc in cand.items():
-        g = int(round(k / 8.0)) * 8
-        g = g if (g != k and abs(g - k) <= 2 and 0 <= g < endbar - floor) else k
+        g = int(round((k - ph_off) / 8.0)) * 8 + ph_off
+        g = g if (g != k and abs(g - k) <= 2 and 0 <= g < endbar - floor and k != kick) else k
         snapped[g] = max(snapped.get(g, 0), sc)
     ordered = sorted(snapped.items(), key=lambda x: -x[1])
     for need, gap in ((W['wide_need'], max(minspace, 16)), (W['tight_need'], minspace)):
@@ -1023,7 +1052,7 @@ def fix_cues(a):
             if getattr(a, 'engine', 'energy') == 'energy':
                 b3 = bands_per_bar(ext, ex2, t, bars, r.Length)
                 picks = place_energy(b3, endbar, target, minspace, floor, have=have,
-                                     phrase_bars=ph, phrase_bonus=getattr(a, 'phrase_bonus', 0.0))
+                                     phrase_bars=ph, phrase_bonus=getattr(a, 'phrase_bonus', 1.0))
             # The final cue first. Skip it only if a cue the run must respect (a
             # hand-set one, under --tag) already sits in the zone a final cue lives in.
             if getattr(a, 'engine', 'energy') != 'energy' and not any(16 <= endbar - h <= 48 for h in have):
@@ -3755,10 +3784,10 @@ def main():
     c.add_argument('--engine', choices=('energy', 'phrase'), default='energy',
                    help='energy (default): cues at major energy shifts, judged from the waveform and the '
                         'beat grid. phrase: the older engine built on Rekordbox\'s phrase markers.')
-    c.add_argument('--phrase-bonus', type=float, default=0.0, metavar='X',
-                   help='energy engine only: add X to candidates on a Rekordbox phrase boundary. 0 = '
-                        'ignore Rekordbox\'s phrasing entirely (default). ~1.0 is worth about +1 point '
-                        'of agreement; off because the assessment should be the tool\'s own.')
+    c.add_argument('--phrase-bonus', type=float, default=1.0, metavar='X',
+                   help='energy engine only: add X to candidates on a Rekordbox phrase boundary '
+                        '(default 1.0). The energy score still decides; the bonus breaks ties toward '
+                        'the phrase grid, which is where the DJ puts 3 cues in 4. 0 = ignore phrasing.')
     c.add_argument('--write', action='store_true', help='with --fix: actually apply the changes')
     c.set_defaults(func=cmd_cues)
 
